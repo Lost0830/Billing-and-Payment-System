@@ -17,6 +17,7 @@ import { toast } from "sonner@2.0.3";
 import axios from "axios";
 import { useEffect, useState } from "react";
 import { fetchPatients } from "../services/api.js";
+import { DiscountService, DiscountOption } from "../services/discountService";
 
 interface InvoiceGenerationProps {
   onNavigateToView: (view: string) => void;
@@ -111,6 +112,7 @@ export function InvoiceGeneration({ onNavigateToView }: InvoiceGenerationProps) 
   // Sample invoices with more comprehensive data
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [patients, setPatients] = useState<any[]>([]);
+  const [dynamicDiscounts, setDynamicDiscounts] = useState<DiscountOption[]>([]);
   const API_BASE = "http://localhost:5000/api";
 
   useEffect(() => {
@@ -126,6 +128,24 @@ export function InvoiceGeneration({ onNavigateToView }: InvoiceGenerationProps) 
     };
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Load active discounts and listen for updates from discount management
+  useEffect(() => {
+    const loadDiscounts = () => {
+      try {
+        const list = DiscountService.getActiveDiscounts();
+        setDynamicDiscounts(list || []);
+      } catch (err) {
+        console.error('Failed to load discounts', err);
+      }
+    };
+
+    loadDiscounts();
+
+    const handler = () => loadDiscounts();
+    window.addEventListener('discounts-updated', handler as EventListener);
+    return () => window.removeEventListener('discounts-updated', handler as EventListener);
   }, []);
 
   const fetchInvoices = async () => {
@@ -246,11 +266,29 @@ export function InvoiceGeneration({ onNavigateToView }: InvoiceGenerationProps) 
 
   const calculateDiscount = () => {
     const subtotal = calculateSubtotal();
+    if (!selectedDiscount) return 0;
+
+    // custom amount
+    if (selectedDiscount === 'custom') return parseFloat(customDiscountAmount) || 0;
+
+    // check dynamic discounts by id
+    const dyn = dynamicDiscounts.find(d => d.id === selectedDiscount);
+    if (dyn) {
+      try {
+        return DiscountService.calculateDiscount(subtotal, dyn);
+      } catch (err) {
+        console.error('Error calculating dynamic discount', err);
+        return 0;
+      }
+    }
+
+    // fallback to legacy DISCOUNT_OPTIONS
     if (selectedDiscount && selectedDiscount !== "insurance") {
       const discount = DISCOUNT_OPTIONS.find(d => d.value === selectedDiscount);
       return discount ? (subtotal * discount.percentage) / 100 : 0;
     }
-    return parseFloat(customDiscountAmount) || 0;
+
+    return 0;
   };
 
   // Helper function to check if an item is taxable (pharmacy/medicine)
@@ -970,6 +1008,11 @@ const confirmDeleteInvoice = async () => {
                       {DISCOUNT_OPTIONS.map((discount) => (
                         <SelectItem key={discount.value} value={discount.value}>
                           {discount.label}
+                        </SelectItem>
+                      ))}
+                      {dynamicDiscounts.map((discount) => (
+                        <SelectItem key={discount.id} value={discount.id}>
+                          {discount.name} {discount.type === 'percentage' ? `(${discount.value}%)` : `(₱${discount.value})`}
                         </SelectItem>
                       ))}
                       <SelectItem value="custom">Custom Amount</SelectItem>

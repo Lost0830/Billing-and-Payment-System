@@ -267,7 +267,12 @@ export class DiscountManagementService {
 
     discounts.push(newDiscount);
     localStorage.setItem(STORAGE_KEY_DISCOUNTS, JSON.stringify(discounts));
-    
+    // Notify listeners that discounts changed
+    try {
+      window.dispatchEvent(new CustomEvent('discounts-updated', { detail: { action: 'create', discount: newDiscount } }));
+    } catch (e) {
+      // server-side or non-window environment: ignore
+    }
     return newDiscount;
   }
 
@@ -292,6 +297,9 @@ export class DiscountManagementService {
     };
 
     localStorage.setItem(STORAGE_KEY_DISCOUNTS, JSON.stringify(discounts));
+    try {
+      window.dispatchEvent(new CustomEvent('discounts-updated', { detail: { action: 'update', discount: discounts[index] } }));
+    } catch (e) {}
     return discounts[index];
   }
 
@@ -303,6 +311,9 @@ export class DiscountManagementService {
     if (filteredDiscounts.length === discounts.length) return false;
     
     localStorage.setItem(STORAGE_KEY_DISCOUNTS, JSON.stringify(filteredDiscounts));
+    try {
+      window.dispatchEvent(new CustomEvent('discounts-updated', { detail: { action: 'delete', id } }));
+    } catch (e) {}
     return true;
   }
 
@@ -312,6 +323,7 @@ export class DiscountManagementService {
     if (!discount) return null;
     
     return this.updateDiscount(id, { isActive: !discount.isActive });
+    // toggleDiscountStatus will trigger update event via updateDiscount
   }
 
   // Increment usage count

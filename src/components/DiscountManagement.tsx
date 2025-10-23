@@ -65,7 +65,6 @@ export function DiscountManagement({ onNavigateToView }: DiscountManagementProps
     type: "percentage" as 'percentage' | 'fixed' | 'service',
     value: 0,
     description: "",
-    category: "",
     startDate: "",
     endDate: "",
     conditions: ""
@@ -91,7 +90,7 @@ export function DiscountManagement({ onNavigateToView }: DiscountManagementProps
   };
 
   const handleCreateDiscount = () => {
-    if (!newDiscount.code || !newDiscount.name || !newDiscount.category || !newDiscount.startDate || !newDiscount.endDate) {
+    if (!newDiscount.code || !newDiscount.name || !newDiscount.startDate || !newDiscount.endDate) {
       toast.error('Please fill in all required fields');
       return;
     }
@@ -105,7 +104,8 @@ export function DiscountManagement({ onNavigateToView }: DiscountManagementProps
         type: newDiscount.type,
         value: newDiscount.value,
         description: newDiscount.description,
-        category: newDiscount.category as any,
+        // default category when admin doesn't select one
+        category: (newDiscount as any).category || 'promotional',
         startDate: newDiscount.startDate,
         endDate: newDiscount.endDate,
         isActive: true,
@@ -121,7 +121,6 @@ export function DiscountManagement({ onNavigateToView }: DiscountManagementProps
         type: "percentage",
         value: 0,
         description: "",
-        category: "",
         startDate: "",
         endDate: "",
         conditions: ""
@@ -541,7 +540,7 @@ export function DiscountManagement({ onNavigateToView }: DiscountManagementProps
               </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="discount-type">Type *</Label>
                 <Select 
@@ -566,22 +565,6 @@ export function DiscountManagement({ onNavigateToView }: DiscountManagementProps
                   value={newDiscount.value || ''}
                   onChange={(e) => setNewDiscount({ ...newDiscount, value: parseFloat(e.target.value) || 0 })}
                 />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="discount-category">Category *</Label>
-                <Select 
-                  value={newDiscount.category} 
-                  onValueChange={(value) => setNewDiscount({ ...newDiscount, category: value })}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select category" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {DISCOUNT_CATEGORIES.map(cat => (
-                      <SelectItem key={cat.value} value={cat.value}>{cat.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
               </div>
             </div>
 

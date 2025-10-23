@@ -1,0 +1,1273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hospital Billing & Payment System</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="header-content">
+            <div class="header-title-section">
+                <div class="header-icon">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z"/>
+                        <path d="M6 12H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+                        <path d="M18 9h2a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2"/>
+                        <path d="M10 6h4"/>
+                        <path d="M10 10h4"/>
+                        <path d="M10 14h4"/>
+                        <path d="M10 18h4"/>
+                    </svg>
+                </div>
+                <div>
+                    <h1>Hospital Billing & Payment System</h1>
+                    <p>Automated financial transactions management</p>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <div class="main-container">
+        <!-- Left Sidebar Navigation -->
+        <div class="sidebar">
+            <div class="sidebar-content">
+                <h3>Modules</h3>
+                <nav class="sidebar-nav">
+                    <button class="nav-button active" data-module="invoice">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>
+                            <polyline points="14,2 14,8 20,8"/>
+                        </svg>
+                        <span>Invoice Generation</span>
+                    </button>
+                    <button class="nav-button" data-module="payment">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect width="20" height="14" x="2" y="5" rx="2"/>
+                            <line x1="2" x2="22" y1="10" y2="10"/>
+                        </svg>
+                        <span>Payment Processing</span>
+                    </button>
+                    <button class="nav-button" data-module="history">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+                            <path d="M3 3v5h5"/>
+                            <path d="M12 7v5l4 2"/>
+                        </svg>
+                        <span>Billing History</span>
+                    </button>
+                    <button class="nav-button" data-module="discounts">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.546 8.546a2 2 0 0 0 2.828 0l7.172-7.172a2 2 0 0 0 0-2.828l-8.546-8.546Z"/>
+                            <circle cx="7.5" cy="7.5" r=".5"/>
+                        </svg>
+                        <span>Discounts & Promotions</span>
+                    </button>
+                </nav>
+            </div>
+        </div>
+
+        <!-- Main Content Area -->
+        <div class="content-area">
+            <div class="content-padding">
+                <!-- Dashboard Overview -->
+                <div class="dashboard-section">
+                    <h2>Dashboard Overview</h2>
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-header">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <line x1="12" x2="12" y1="2" y2="22"/>
+                                    <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+                                </svg>
+                                <h3>Total Revenue</h3>
+                            </div>
+                            <div class="stat-content">
+                                <div class="stat-value">₱6,287,500</div>
+                                <p>This month</p>
+                            </div>
+                        </div>
+                        
+                        <div class="stat-card">
+                            <div class="stat-header">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="22,12 18,12 15,21 9,3 6,12 2,12"/>
+                                </svg>
+                                <h3>Pending Payments</h3>
+                            </div>
+                            <div class="stat-content">
+                                <div class="stat-value">₱946,275</div>
+                                <p>Awaiting collection</p>
+                            </div>
+                        </div>
+
+                        <div class="stat-card">
+                            <div class="stat-header">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                                    <polyline points="14,2 14,8 20,8"/>
+                                    <line x1="16" x2="8" y1="13" y2="13"/>
+                                    <line x1="16" x2="8" y1="17" y2="17"/>
+                                    <polyline points="10,9 9,9 8,9"/>
+                                </svg>
+                                <h3>Processed Invoices</h3>
+                            </div>
+                            <div class="stat-content">
+                                <div class="stat-value">156</div>
+                                <p>This month</p>
+                            </div>
+                        </div>
+
+                        <div class="stat-card">
+                            <div class="stat-header">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
+                                    <circle cx="9" cy="7" r="4"/>
+                                    <path d="m22 21-3-3m-2.5 0c1.1 0 2-1 2-2s-1-2-2-2-2 1-2 2 1 2 2 2"/>
+                                </svg>
+                                <h3>Outstanding Invoices</h3>
+                            </div>
+                            <div class="stat-content">
+                                <div class="stat-value">15</div>
+                                <p>Require attention</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Module Content -->
+                <div class="module-content">
+                    <div class="module-header">
+                        <h2 id="module-title">Invoice Generation Module</h2>
+                    </div>
+                    
+                    <!-- Invoice Generation Module -->
+                    <div id="invoice-module" class="module active">
+                        <!-- Invoice Tabs -->
+                        <div class="tabs">
+                            <div class="tab-list">
+                                <button class="tab-button active" data-tab="create">Create Invoice</button>
+                                <button class="tab-button" data-tab="drafts">Draft Invoices</button>
+                                <button class="tab-button" data-tab="templates">Service Templates</button>
+                            </div>
+
+                            <!-- Create Invoice Tab -->
+                            <div id="create-tab" class="tab-content active">
+                                <!-- Patient Information Card -->
+                                <div class="card">
+                                    <div class="card-header">
+                                        <h3>Patient Information</h3>
+                                    </div>
+                                    <div class="card-content">
+                                        <!-- Patient Search -->
+                                        <div class="form-group">
+                                            <label for="patientSearch">Search Patient</label>
+                                            <div class="input-with-icon">
+                                                <svg class="input-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                    <circle cx="11" cy="11" r="8"/>
+                                                    <path d="M21 21l-4.35-4.35"/>
+                                                </svg>
+                                                <input type="text" id="patientSearch" placeholder="Search by patient name or ID...">
+                                            </div>
+                                            <div id="patient-results" class="search-results hidden"></div>
+                                        </div>
+
+                                        <div class="form-grid">
+                                            <div class="form-group">
+                                                <label for="patientId">Patient ID</label>
+                                                <input type="text" id="patientId" placeholder="Enter patient ID">
+                                            </div>
+                                            <div class="form-group">
+                                                <label for="patientName">Patient Name</label>
+                                                <input type="text" id="patientName" placeholder="Enter patient name">
+                                            </div>
+                                            <div class="form-group">
+                                                <label for="contactNumber">Contact Number</label>
+                                                <input type="text" id="contactNumber" placeholder="Enter contact number">
+                                            </div>
+                                            <div class="form-group">
+                                                <label for="visitDate">Visit Date</label>
+                                                <input type="date" id="visitDate">
+                                            </div>
+                                            <div class="form-group">
+                                                <label for="doctor">Attending Doctor</label>
+                                                <select id="doctor">
+                                                    <option value="">Select doctor</option>
+                                                    <option value="dr-santos">Dr. Maria Santos</option>
+                                                    <option value="dr-cruz">Dr. Juan Cruz</option>
+                                                    <option value="dr-lopez">Dr. Roberto Lopez</option>
+                                                    <option value="dr-garcia">Dr. Ana Garcia</option>
+                                                </select>
+                                            </div>
+                                            <div class="form-group">
+                                                <label for="roomType">Room Type</label>
+                                                <select id="roomType">
+                                                    <option value="">Select room type</option>
+                                                    <option value="general">General Ward</option>
+                                                    <option value="private">Private Room</option>
+                                                    <option value="semi-private">Semi-Private</option>
+                                                    <option value="icu">ICU</option>
+                                                    <option value="outpatient">Outpatient</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                        
+                                        <div class="form-group">
+                                            <label for="address">Address</label>
+                                            <textarea id="address" placeholder="Enter patient address" rows="2"></textarea>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Quick Service Templates Card -->
+                                <div class="card">
+                                    <div class="card-header red">
+                                        <h3>Quick Add Services</h3>
+                                    </div>
+                                    <div class="card-content">
+                                        <div class="add-service-form">
+                                            <div class="form-group flex-1">
+                                                <label for="serviceTemplate">Service Template</label>
+                                                <select id="serviceTemplate">
+                                                    <option value="">Select a service template</option>
+                                                    <option value="1">General Consultation - ₱2,000</option>
+                                                    <option value="2">Emergency Consultation - ₱3,500</option>
+                                                    <option value="3">Blood Chemistry - ₱1,500</option>
+                                                    <option value="4">CBC - ₱800</option>
+                                                    <option value="5">Chest X-Ray - ₱2,000</option>
+                                                    <option value="6">CT Scan - ₱8,000</option>
+                                                    <option value="7">Room Charge - Private - ₱3,000</option>
+                                                    <option value="8">Room Charge - ICU - ₱8,000</option>
+                                                </select>
+                                            </div>
+                                            <button type="button" class="btn-red" id="addTemplateBtn">
+                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                    <line x1="12" x2="12" y1="5" y2="19"/>
+                                                    <line x1="5" x2="19" y1="12" y2="12"/>
+                                                </svg>
+                                                Add Service
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Manual Add Service Card -->
+                                <div class="card">
+                                    <div class="card-header red">
+                                        <h3>Add Custom Service/Item</h3>
+                                    </div>
+                                    <div class="card-content">
+                                        <div class="add-item-form">
+                                            <div class="form-group">
+                                                <label for="customService">Service/Item</label>
+                                                <input type="text" id="customService" placeholder="Enter service name">
+                                            </div>
+                                            <div class="form-group">
+                                                <label for="category">Category</label>
+                                                <select id="category">
+                                                    <option value="Medical">Medical</option>
+                                                    <option value="Laboratory">Laboratory</option>
+                                                    <option value="Radiology">Radiology</option>
+                                                    <option value="Pharmacy">Pharmacy</option>
+                                                    <option value="Accommodation">Accommodation</option>
+                                                    <option value="Other">Other</option>
+                                                </select>
+                                            </div>
+                                            <div class="form-group">
+                                                <label for="quantity">Quantity</label>
+                                                <input type="number" id="quantity" min="1" value="1">
+                                            </div>
+                                            <div class="form-group">
+                                                <label for="unitPrice">Unit Price (₱)</label>
+                                                <input type="number" id="unitPrice" min="0" step="0.01" placeholder="0.00">
+                                            </div>
+                                            <button type="button" class="btn-red" id="addItemBtn">
+                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                    <line x1="12" x2="12" y1="5" y2="19"/>
+                                                    <line x1="5" x2="19" y1="12" y2="12"/>
+                                                </svg>
+                                                Add Item
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Invoice Items Table -->
+                                <div class="card">
+                                    <div class="card-header">
+                                        <h3>Invoice Items</h3>
+                                    </div>
+                                    <div class="card-content no-padding">
+                                        <div class="table-container">
+                                            <table id="invoiceItemsTable">
+                                                <thead>
+                                                    <tr>
+                                                        <th>Service/Item</th>
+                                                        <th>Category</th>
+                                                        <th>Quantity</th>
+                                                        <th>Unit Price</th>
+                                                        <th>Total</th>
+                                                        <th>Actions</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody id="invoiceItemsBody">
+                                                    <!-- Items will be added dynamically -->
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Discount and Summary -->
+                                <div class="grid-2">
+                                    <!-- Discount Card -->
+                                    <div class="card">
+                                        <div class="card-header red">
+                                            <h3>Discount & Notes</h3>
+                                        </div>
+                                        <div class="card-content">
+                                            <div class="form-group">
+                                                <label for="discountRate">Discount (%)</label>
+                                                <input type="number" id="discountRate" min="0" max="100" step="0.1" placeholder="0">
+                                            </div>
+                                            <div class="form-group">
+                                                <label for="invoiceNotes">Invoice Notes</label>
+                                                <textarea id="invoiceNotes" placeholder="Add any notes or special instructions..." rows="3"></textarea>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Summary Card -->
+                                    <div class="card">
+                                        <div class="card-header">
+                                            <h3>Invoice Summary</h3>
+                                        </div>
+                                        <div class="card-content">
+                                            <div class="summary-item">
+                                                <span>Subtotal:</span>
+                                                <span id="subtotal">₱0.00</span>
+                                            </div>
+                                            <div class="summary-item discount-row hidden">
+                                                <span id="discount-label">Discount (0%):</span>
+                                                <span id="discount-amount" class="text-red">-₱0.00</span>
+                                            </div>
+                                            <div class="summary-item">
+                                                <span>VAT (12%):</span>
+                                                <span id="vat">₱0.00</span>
+                                            </div>
+                                            <div class="summary-item total">
+                                                <span>Total Amount:</span>
+                                                <span id="total">₱0.00</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Actions Card -->
+                                <div class="card">
+                                    <div class="card-header">
+                                        <h3>Actions</h3>
+                                    </div>
+                                    <div class="card-content">
+                                        <div class="action-buttons">
+                                            <button class="btn-red" id="generateBtn">
+                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                    <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>
+                                                    <polyline points="14,2 14,8 20,8"/>
+                                                </svg>
+                                                Generate
+                                            </button>
+                                            <button class="btn-outline-green" id="saveDraftBtn">
+                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                                                    <polyline points="17,21 17,13 7,13 7,21"/>
+                                                    <polyline points="7,3 7,8 15,8"/>
+                                                </svg>
+                                                Save Draft
+                                            </button>
+                                            <button class="btn-outline-red" id="sendBtn">
+                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                    <path d="m22 2-7 20-4-9-9-4Z"/>
+                                                    <path d="M22 2 11 13"/>
+                                                </svg>
+                                                Send
+                                            </button>
+                                            <button class="btn-outline" id="printBtn">
+                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                    <polyline points="6,9 6,2 18,2 18,9"/>
+                                                    <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/>
+                                                    <rect width="12" height="8" x="6" y="14"/>
+                                                </svg>
+                                                Print
+                                            </button>
+                                            <button class="btn-outline" id="pdfBtn">
+                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                                    <polyline points="7,10 12,15 17,10"/>
+                                                    <line x1="12" x2="12" y1="15" y2="3"/>
+                                                </svg>
+                                                PDF
+                                            </button>
+                                            <button class="btn-outline" id="duplicateBtn">
+                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                    <rect width="14" height="14" x="8" y="8" rx="2" ry="2"/>
+                                                    <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>
+                                                </svg>
+                                                Duplicate
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Draft Invoices Tab -->
+                            <div id="drafts-tab" class="tab-content">
+                                <div class="card">
+                                    <div class="card-header red">
+                                        <h3>Draft Invoices</h3>
+                                    </div>
+                                    <div class="card-content no-padding">
+                                        <div class="table-container">
+                                            <table>
+                                                <thead>
+                                                    <tr>
+                                                        <th>Draft ID</th>
+                                                        <th>Patient Name</th>
+                                                        <th>Created Date</th>
+                                                        <th>Total Amount</th>
+                                                        <th>Actions</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    <tr>
+                                                        <td>DRAFT-001</td>
+                                                        <td>Juan Santos</td>
+                                                        <td>2024-01-20</td>
+                                                        <td>₱15,750</td>
+                                                        <td>
+                                                            <button class="btn-red btn-sm">Load</button>
+                                                            <button class="btn-outline btn-sm text-red">
+                                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                                    <polyline points="3,6 5,6 21,6"/>
+                                                                    <path d="m19,6v14a2,2 0 0,1-2,2H7a2,2 0 0,1-2-2V6m3,0V4a2,2 0 0,1,2-2h4a2,2 0 0,1,2,2v2"/>
+                                                                </svg>
+                                                            </button>
+                                                        </td>
+                                                    </tr>
+                                                    <tr>
+                                                        <td>DRAFT-002</td>
+                                                        <td>Maria Lopez</td>
+                                                        <td>2024-01-19</td>
+                                                        <td>₱8,900</td>
+                                                        <td>
+                                                            <button class="btn-red btn-sm">Load</button>
+                                                            <button class="btn-outline btn-sm text-red">
+                                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                                    <polyline points="3,6 5,6 21,6"/>
+                                                                    <path d="m19,6v14a2,2 0 0,1-2,2H7a2,2 0 0,1-2-2V6m3,0V4a2,2 0 0,1,2-2h4a2,2 0 0,1,2,2v2"/>
+                                                                </svg>
+                                                            </button>
+                                                        </td>
+                                                    </tr>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Service Templates Tab -->
+                            <div id="templates-tab" class="tab-content">
+                                <div class="card">
+                                    <div class="card-header">
+                                        <h3>Service Templates</h3>
+                                    </div>
+                                    <div class="card-content no-padding">
+                                        <div class="table-container">
+                                            <table>
+                                                <thead>
+                                                    <tr>
+                                                        <th>Service Name</th>
+                                                        <th>Category</th>
+                                                        <th>Base Price</th>
+                                                        <th>Description</th>
+                                                        <th>Actions</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    <tr>
+                                                        <td>General Consultation</td>
+                                                        <td><span class="badge">Medical</span></td>
+                                                        <td>₱2,000</td>
+                                                        <td>General medical consultation</td>
+                                                        <td><button class="btn-red btn-sm">Add to Invoice</button></td>
+                                                    </tr>
+                                                    <tr>
+                                                        <td>Emergency Consultation</td>
+                                                        <td><span class="badge">Medical</span></td>
+                                                        <td>₱3,500</td>
+                                                        <td>Emergency medical consultation</td>
+                                                        <td><button class="btn-red btn-sm">Add to Invoice</button></td>
+                                                    </tr>
+                                                    <tr>
+                                                        <td>Blood Chemistry</td>
+                                                        <td><span class="badge">Laboratory</span></td>
+                                                        <td>₱1,500</td>
+                                                        <td>Complete blood chemistry panel</td>
+                                                        <td><button class="btn-red btn-sm">Add to Invoice</button></td>
+                                                    </tr>
+                                                    <tr>
+                                                        <td>CBC</td>
+                                                        <td><span class="badge">Laboratory</span></td>
+                                                        <td>₱800</td>
+                                                        <td>Complete blood count</td>
+                                                        <td><button class="btn-red btn-sm">Add to Invoice</button></td>
+                                                    </tr>
+                                                    <tr>
+                                                        <td>Chest X-Ray</td>
+                                                        <td><span class="badge">Radiology</span></td>
+                                                        <td>₱2,000</td>
+                                                        <td>Chest X-Ray examination</td>
+                                                        <td><button class="btn-red btn-sm">Add to Invoice</button></td>
+                                                    </tr>
+                                                    <tr>
+                                                        <td>CT Scan</td>
+                                                        <td><span class="badge">Radiology</span></td>
+                                                        <td>₱8,000</td>
+                                                        <td>CT scan imaging</td>
+                                                        <td><button class="btn-red btn-sm">Add to Invoice</button></td>
+                                                    </tr>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Payment Processing Module -->
+                    <div id="payment-module" class="module">
+                        <!-- Payment Stats -->
+                        <div class="stats-grid small-stats">
+                            <div class="stat-card">
+                                <div class="stat-header">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <line x1="12" x2="12" y1="2" y2="22"/>
+                                        <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+                                    </svg>
+                                    <h3>Today's Payments</h3>
+                                </div>
+                                <div class="stat-content">
+                                    <div class="stat-value">₱787,500.00</div>
+                                    <p>23 transactions</p>
+                                </div>
+                            </div>
+                            
+                            <div class="stat-card">
+                                <div class="stat-header red">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                                        <polyline points="14,2 14,8 20,8"/>
+                                        <line x1="16" x2="8" y1="13" y2="13"/>
+                                        <line x1="16" x2="8" y1="17" y2="17"/>
+                                        <polyline points="10,9 9,9 8,9"/>
+                                    </svg>
+                                    <h3>Pending Invoices</h3>
+                                </div>
+                                <div class="stat-content">
+                                    <div class="stat-value">₱138,812.50</div>
+                                    <p>3 invoices</p>
+                                </div>
+                            </div>
+
+                            <div class="stat-card">
+                                <div class="stat-header red">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                                        <path d="m9 11 3 3L22 4"/>
+                                    </svg>
+                                    <h3>Success Rate</h3>
+                                </div>
+                                <div class="stat-content">
+                                    <div class="stat-value">98.5%</div>
+                                    <p>Last 30 days</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Payment Tabs -->
+                        <div class="tabs">
+                            <div class="tab-list payment-tabs">
+                                <button class="tab-button active" data-tab="process">Process Payment</button>
+                                <button class="tab-button" data-tab="pending">Pending Invoices</button>
+                                <button class="tab-button" data-tab="recent">Recent Payments</button>
+                                <button class="tab-button" data-tab="plans">Payment Plans</button>
+                                <button class="tab-button" data-tab="failed">Failed Payments</button>
+                                <button class="tab-button" data-tab="refunds">Refunds</button>
+                            </div>
+
+                            <!-- Process Payment Tab -->
+                            <div id="process-tab" class="tab-content active">
+                                <div class="card">
+                                    <div class="card-header">
+                                        <h3>Process New Payment</h3>
+                                    </div>
+                                    <div class="card-content">
+                                        <div class="grid-2">
+                                            <div class="payment-form-left">
+                                                <div class="form-group">
+                                                    <label for="paymentInvoice">Select Invoice</label>
+                                                    <select id="paymentInvoice">
+                                                        <option value="">Select invoice to pay</option>
+                                                        <option value="INV-001">INV-001 - Juan Dela Cruz (₱42,500)</option>
+                                                        <option value="INV-002">INV-002 - Maria Santos (₱62,537.50)</option>
+                                                        <option value="INV-003">INV-003 - Roberto Gonzales (₱33,775)</option>
+                                                    </select>
+                                                </div>
+
+                                                <div class="form-group">
+                                                    <label for="paymentMethod">Payment Method</label>
+                                                    <select id="paymentMethod">
+                                                        <option value="">Select payment method</option>
+                                                        <option value="cash">Cash</option>
+                                                        <option value="credit-card">Credit Card</option>
+                                                        <option value="debit-card">Debit Card</option>
+                                                        <option value="gcash">GCash</option>
+                                                        <option value="paymaya">PayMaya</option>
+                                                        <option value="bank-transfer">Bank Transfer</option>
+                                                    </select>
+                                                </div>
+
+                                                <div class="form-group">
+                                                    <label for="paymentAmount">Payment Amount</label>
+                                                    <input type="number" id="paymentAmount" step="0.01" placeholder="Enter amount">
+                                                </div>
+                                            </div>
+
+                                            <!-- Card Details Section -->
+                                            <div id="cardDetails" class="payment-form-right hidden">
+                                                <h4>Card Details</h4>
+                                                <div class="form-group">
+                                                    <label for="cardNumber">Card Number</label>
+                                                    <input type="text" id="cardNumber" placeholder="1234 5678 9012 3456">
+                                                </div>
+                                                <div class="grid-2">
+                                                    <div class="form-group">
+                                                        <label for="expiryDate">Expiry Date</label>
+                                                        <input type="text" id="expiryDate" placeholder="MM/YY">
+                                                    </div>
+                                                    <div class="form-group">
+                                                        <label for="cvv">CVV</label>
+                                                        <input type="text" id="cvv" placeholder="123">
+                                                    </div>
+                                                </div>
+                                                <div class="form-group">
+                                                    <label for="cardholderName">Cardholder Name</label>
+                                                    <input type="text" id="cardholderName" placeholder="John Doe">
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div class="form-actions">
+                                            <button class="btn-red" id="processPaymentBtn">
+                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                    <rect width="20" height="14" x="2" y="5" rx="2"/>
+                                                    <line x1="2" x2="22" y1="10" y2="10"/>
+                                                </svg>
+                                                Process Payment
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Pending Invoices Tab -->
+                            <div id="pending-tab" class="tab-content">
+                                <div class="card">
+                                    <div class="card-header red">
+                                        <h3>Pending Invoices</h3>
+                                    </div>
+                                    <div class="card-content no-padding">
+                                        <div class="table-container">
+                                            <table>
+                                                <thead>
+                                                    <tr>
+                                                        <th>Invoice ID</th>
+                                                        <th>Patient Name</th>
+                                                        <th>Amount</th>
+                                                        <th>Date</th>
+                                                        <th>Status</th>
+                                                        <th>Action</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    <tr>
+                                                        <td>INV-001</td>
+                                                        <td>Juan Dela Cruz</td>
+                                                        <td>₱42,500</td>
+                                                        <td>2024-01-15</td>
+                                                        <td><span class="badge-red">Pending</span></td>
+                                                        <td><button class="btn-red btn-sm">Process Payment</button></td>
+                                                    </tr>
+                                                    <tr>
+                                                        <td>INV-002</td>
+                                                        <td>Maria Santos</td>
+                                                        <td>₱62,537.50</td>
+                                                        <td>2024-01-16</td>
+                                                        <td><span class="badge-red">Pending</span></td>
+                                                        <td><button class="btn-red btn-sm">Process Payment</button></td>
+                                                    </tr>
+                                                    <tr>
+                                                        <td>INV-003</td>
+                                                        <td>Roberto Gonzales</td>
+                                                        <td>₱33,775</td>
+                                                        <td>2024-01-17</td>
+                                                        <td><span class="badge-red">Pending</span></td>
+                                                        <td><button class="btn-red btn-sm">Process Payment</button></td>
+                                                    </tr>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Recent Payments Tab -->
+                            <div id="recent-tab" class="tab-content">
+                                <div class="card">
+                                    <div class="card-header red">
+                                        <h3>Recent Payments</h3>
+                                    </div>
+                                    <div class="card-content no-padding">
+                                        <div class="table-container">
+                                            <table>
+                                                <thead>
+                                                    <tr>
+                                                        <th>Payment ID</th>
+                                                        <th>Invoice ID</th>
+                                                        <th>Patient Name</th>
+                                                        <th>Amount</th>
+                                                        <th>Method</th>
+                                                        <th>Date</th>
+                                                        <th>Status</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    <tr>
+                                                        <td>PAY-001</td>
+                                                        <td>INV-004</td>
+                                                        <td>Sarah Reyes</td>
+                                                        <td>₱47,500</td>
+                                                        <td>Credit Card</td>
+                                                        <td>2024-01-14</td>
+                                                        <td><span class="badge-red">Completed</span></td>
+                                                    </tr>
+                                                    <tr>
+                                                        <td>PAY-002</td>
+                                                        <td>INV-005</td>
+                                                        <td>Miguel Ramos</td>
+                                                        <td>₱21,262.50</td>
+                                                        <td>GCash</td>
+                                                        <td>2024-01-13</td>
+                                                        <td><span class="badge-red">Completed</span></td>
+                                                    </tr>
+                                                    <tr>
+                                                        <td>PAY-003</td>
+                                                        <td>INV-006</td>
+                                                        <td>Lisa Cruz</td>
+                                                        <td>₱39,000</td>
+                                                        <td>Cash</td>
+                                                        <td>2024-01-12</td>
+                                                        <td><span class="badge-red">Completed</span></td>
+                                                    </tr>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Billing History Module -->
+                    <div id="history-module" class="module">
+                        <!-- History Stats -->
+                        <div class="stats-grid">
+                            <div class="stat-card">
+                                <div class="stat-header">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <line x1="12" x2="12" y1="2" y2="22"/>
+                                        <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+                                    </svg>
+                                    <h3>Total Revenue</h3>
+                                </div>
+                                <div class="stat-content">
+                                    <div class="stat-value">₱121,012.50</div>
+                                    <p>This month</p>
+                                </div>
+                            </div>
+                            
+                            <div class="stat-card">
+                                <div class="stat-header red">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <circle cx="12" cy="12" r="10"/>
+                                        <line x1="12" x2="12" y1="8" y2="12"/>
+                                        <line x1="12" x2="12.01" y1="16" y2="16"/>
+                                    </svg>
+                                    <h3>Outstanding</h3>
+                                </div>
+                                <div class="stat-content">
+                                    <div class="stat-value">₱126,287.50</div>
+                                    <p>2 invoices</p>
+                                </div>
+                            </div>
+
+                            <div class="stat-card">
+                                <div class="stat-header orange">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                                        <polyline points="14,2 14,8 20,8"/>
+                                        <line x1="16" x2="8" y1="13" y2="13"/>
+                                        <line x1="16" x2="8" y1="17" y2="17"/>
+                                        <polyline points="10,9 9,9 8,9"/>
+                                    </svg>
+                                    <h3>Overdue</h3>
+                                </div>
+                                <div class="stat-content">
+                                    <div class="stat-value">1</div>
+                                    <p>Require attention</p>
+                                </div>
+                            </div>
+
+                            <div class="stat-card">
+                                <div class="stat-header red">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <line x1="12" x2="12" y1="2" y2="22"/>
+                                        <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+                                    </svg>
+                                    <h3>Collection Rate</h3>
+                                </div>
+                                <div class="stat-content">
+                                    <div class="stat-value">85.3%</div>
+                                    <p>Last 30 days</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Search and Filters -->
+                        <div class="card">
+                            <div class="card-header">
+                                <h3>Search & Filters</h3>
+                            </div>
+                            <div class="card-content">
+                                <div class="form-grid">
+                                    <div class="form-group">
+                                        <label for="historySearch">Search</label>
+                                        <div class="input-with-icon">
+                                            <svg class="input-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <circle cx="11" cy="11" r="8"/>
+                                                <path d="M21 21l-4.35-4.35"/>
+                                            </svg>
+                                            <input type="text" id="historySearch" placeholder="Search by patient name, ID, or invoice...">
+                                        </div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="statusFilter">Status</label>
+                                        <select id="statusFilter">
+                                            <option value="all">All Statuses</option>
+                                            <option value="paid">Paid</option>
+                                            <option value="outstanding">Outstanding</option>
+                                            <option value="overdue">Overdue</option>
+                                            <option value="partially paid">Partially Paid</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="dateFrom">From Date</label>
+                                        <input type="date" id="dateFrom">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="dateTo">To Date</label>
+                                        <input type="date" id="dateTo">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- History Tabs -->
+                        <div class="tabs">
+                            <div class="tab-list">
+                                <button class="tab-button active" data-tab="invoices">Invoice History</button>
+                                <button class="tab-button" data-tab="payments">Payment History</button>
+                                <button class="tab-button" data-tab="outstanding">Outstanding Balances</button>
+                            </div>
+
+                            <!-- Invoice History Tab -->
+                            <div id="invoices-tab" class="tab-content active">
+                                <div class="card">
+                                    <div class="card-header red">
+                                        <div class="header-with-action">
+                                            <h3>Invoice History</h3>
+                                            <button class="btn-outline btn-sm">
+                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                                    <polyline points="7,10 12,15 17,10"/>
+                                                    <line x1="12" x2="12" y1="15" y2="3"/>
+                                                </svg>
+                                                Export
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div class="card-content no-padding">
+                                        <div class="table-container">
+                                            <table>
+                                                <thead>
+                                                    <tr>
+                                                        <th>Invoice ID</th>
+                                                        <th>Patient Name</th>
+                                                        <th>Patient ID</th>
+                                                        <th>Invoice Date</th>
+                                                        <th>Due Date</th>
+                                                        <th>Total Amount</th>
+                                                        <th>Paid Amount</th>
+                                                        <th>Outstanding</th>
+                                                        <th>Status</th>
+                                                        <th>Action</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody id="invoiceHistoryBody">
+                                                    <!-- Will be populated by JavaScript -->
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Discounts & Promotions Module -->
+                    <div id="discounts-module" class="module">
+                        <!-- Discount Stats -->
+                        <div class="stats-grid">
+                            <div class="stat-card">
+                                <div class="stat-header teal">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.546 8.546a2 2 0 0 0 2.828 0l7.172-7.172a2 2 0 0 0 0-2.828l-8.546-8.546Z"/>
+                                        <circle cx="7.5" cy="7.5" r=".5"/>
+                                    </svg>
+                                    <h3>Active Discounts</h3>
+                                </div>
+                                <div class="stat-content">
+                                    <div class="stat-value">3</div>
+                                    <p>Currently available</p>
+                                </div>
+                            </div>
+                            
+                            <div class="stat-card">
+                                <div class="stat-header red">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <polyline points="20,6 9,17 4,12"/>
+                                    </svg>
+                                    <h3>Total Savings</h3>
+                                </div>
+                                <div class="stat-content">
+                                    <div class="stat-value">₱312.50</div>
+                                    <p>This month</p>
+                                </div>
+                            </div>
+
+                            <div class="stat-card">
+                                <div class="stat-header red">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <line x1="19" x2="5" y1="5" y2="19"/>
+                                        <circle cx="6.5" cy="6.5" r="3.5"/>
+                                        <circle cx="17.5" cy="17.5" r="3.5"/>
+                                    </svg>
+                                    <h3>Applications</h3>
+                                </div>
+                                <div class="stat-content">
+                                    <div class="stat-value">291</div>
+                                    <p>Total usage count</p>
+                                </div>
+                            </div>
+
+                            <div class="stat-card">
+                                <div class="stat-header red">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                                        <polyline points="14,2 14,8 20,8"/>
+                                        <line x1="16" x2="8" y1="13" y2="13"/>
+                                        <line x1="16" x2="8" y1="17" y2="17"/>
+                                        <polyline points="10,9 9,9 8,9"/>
+                                    </svg>
+                                    <h3>Audit Logs</h3>
+                                </div>
+                                <div class="stat-content">
+                                    <div class="stat-value">4</div>
+                                    <p>Recent activities</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Discount Tabs -->
+                        <div class="tabs">
+                            <div class="tab-list">
+                                <button class="tab-button active" data-tab="manage">Manage Discounts</button>
+                                <button class="tab-button" data-tab="create">Create New</button>
+                                <button class="tab-button" data-tab="audit">Audit Logs</button>
+                            </div>
+
+                            <!-- Manage Discounts Tab -->
+                            <div id="manage-tab" class="tab-content active">
+                                <div class="card">
+                                    <div class="card-header red">
+                                        <h3>Active Discounts & Promotions</h3>
+                                    </div>
+                                    <div class="card-content no-padding">
+                                        <div class="table-container">
+                                            <table>
+                                                <thead>
+                                                    <tr>
+                                                        <th>Discount Name</th>
+                                                        <th>Type</th>
+                                                        <th>Value</th>
+                                                        <th>Valid From</th>
+                                                        <th>Valid To</th>
+                                                        <th>Usage</th>
+                                                        <th>Status</th>
+                                                        <th>Actions</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    <tr>
+                                                        <td>
+                                                            <div>
+                                                                <div class="font-medium">Senior Citizen Discount</div>
+                                                                <div class="text-sm text-gray">Discount for patients 65 years and older</div>
+                                                            </div>
+                                                        </td>
+                                                        <td><span class="badge-red">Percentage</span></td>
+                                                        <td>15%</td>
+                                                        <td>2024-01-01</td>
+                                                        <td>2024-12-31</td>
+                                                        <td>45 / 1000</td>
+                                                        <td>
+                                                            <div class="switch-container">
+                                                                <label class="switch">
+                                                                    <input type="checkbox" checked>
+                                                                    <span class="slider round"></span>
+                                                                </label>
+                                                                <span class="switch-label">Active</span>
+                                                            </div>
+                                                        </td>
+                                                        <td>
+                                                            <button class="btn-outline btn-sm">
+                                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                                    <path d="m18 2 4 4-14 14H4v-4L18 2Z"/>
+                                                                    <path d="M14.5 5.5 18.5 9.5"/>
+                                                                </svg>
+                                                            </button>
+                                                            <button class="btn-outline btn-sm text-red">
+                                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                                    <polyline points="3,6 5,6 21,6"/>
+                                                                    <path d="m19,6v14a2,2 0 0,1-2,2H7a2,2 0 0,1-2-2V6m3,0V4a2,2 0 0,1,2-2h4a2,2 0 0,1,2,2v2"/>
+                                                                </svg>
+                                                            </button>
+                                                        </td>
+                                                    </tr>
+                                                    <tr>
+                                                        <td>
+                                                            <div>
+                                                                <div class="font-medium">Emergency Services Fee Waiver</div>
+                                                                <div class="text-sm text-gray">Emergency room fee waiver for qualifying patients</div>
+                                                            </div>
+                                                        </td>
+                                                        <td><span class="badge-red">Fixed Amount</span></td>
+                                                        <td>₱100.00</td>
+                                                        <td>2024-01-01</td>
+                                                        <td>2024-06-30</td>
+                                                        <td>23 / 500</td>
+                                                        <td>
+                                                            <div class="switch-container">
+                                                                <label class="switch">
+                                                                    <input type="checkbox" checked>
+                                                                    <span class="slider round"></span>
+                                                                </label>
+                                                                <span class="switch-label">Active</span>
+                                                            </div>
+                                                        </td>
+                                                        <td>
+                                                            <button class="btn-outline btn-sm">
+                                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                                    <path d="m18 2 4 4-14 14H4v-4L18 2Z"/>
+                                                                    <path d="M14.5 5.5 18.5 9.5"/>
+                                                                </svg>
+                                                            </button>
+                                                            <button class="btn-outline btn-sm text-red">
+                                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                                    <polyline points="3,6 5,6 21,6"/>
+                                                                    <path d="m19,6v14a2,2 0 0,1-2,2H7a2,2 0 0,1-2-2V6m3,0V4a2,2 0 0,1,2-2h4a2,2 0 0,1,2,2v2"/>
+                                                                </svg>
+                                                            </button>
+                                                        </td>
+                                                    </tr>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Create New Discount Tab -->
+                            <div id="create-tab" class="tab-content">
+                                <div class="card">
+                                    <div class="card-header red">
+                                        <h3>Create New Discount/Promotion</h3>
+                                    </div>
+                                    <div class="card-content">
+                                        <div class="grid-2">
+                                            <div class="discount-form-left">
+                                                <div class="form-group">
+                                                    <label for="discountName">Discount Name</label>
+                                                    <input type="text" id="discountName" placeholder="Enter discount name">
+                                                </div>
+
+                                                <div class="form-group">
+                                                    <label for="discountType">Discount Type</label>
+                                                    <select id="discountType">
+                                                        <option value="percentage">Percentage (%)</option>
+                                                        <option value="fixed">Fixed Amount (₱)</option>
+                                                    </select>
+                                                </div>
+
+                                                <div class="form-group">
+                                                    <label for="discountValue">Discount Value (%)</label>
+                                                    <input type="number" id="discountValue" min="0" step="1" placeholder="Enter percentage">
+                                                </div>
+
+                                                <div class="form-group">
+                                                    <label for="maxUsage">Maximum Usage (Optional)</label>
+                                                    <input type="number" id="maxUsage" min="1" placeholder="Leave empty for unlimited">
+                                                </div>
+                                            </div>
+
+                                            <div class="discount-form-right">
+                                                <div class="form-group">
+                                                    <label for="validFrom">Valid From</label>
+                                                    <input type="date" id="validFrom">
+                                                </div>
+
+                                                <div class="form-group">
+                                                    <label for="validTo">Valid To</label>
+                                                    <input type="date" id="validTo">
+                                                </div>
+
+                                                <div class="form-group">
+                                                    <label for="applicableServices">Applicable Services</label>
+                                                    <select id="applicableServices">
+                                                        <option value="all">All Services</option>
+                                                        <option value="consultation">Consultation</option>
+                                                        <option value="diagnostic">Diagnostic Tests</option>
+                                                        <option value="emergency">Emergency Services</option>
+                                                        <option value="vaccination">Vaccinations</option>
+                                                        <option value="surgery">Surgery</option>
+                                                    </select>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div class="form-group">
+                                            <label for="discountDescription">Description</label>
+                                            <textarea id="discountDescription" placeholder="Enter detailed description of the discount" rows="3"></textarea>
+                                        </div>
+
+                                        <div class="form-actions">
+                                            <button class="btn-red" id="createDiscountBtn">
+                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                    <line x1="12" x2="12" y1="5" y2="19"/>
+                                                    <line x1="5" x2="19" y1="12" y2="12"/>
+                                                </svg>
+                                                Create Discount
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Audit Logs Tab -->
+                            <div id="audit-tab" class="tab-content">
+                                <div class="card">
+                                    <div class="card-header red">
+                                        <h3>Discount Application Audit Logs</h3>
+                                    </div>
+                                    <div class="card-content no-padding">
+                                        <div class="table-container">
+                                            <table>
+                                                <thead>
+                                                    <tr>
+                                                        <th>Timestamp</th>
+                                                        <th>Action</th>
+                                                        <th>Discount Name</th>
+                                                        <th>Patient Name</th>
+                                                        <th>Invoice ID</th>
+                                                        <th>Amount Saved</th>
+                                                        <th>Applied By</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    <tr>
+                                                        <td>2024-01-20 14:30:00</td>
+                                                        <td><span class="badge-red">Applied</span></td>
+                                                        <td>Senior Citizen Discount</td>
+                                                        <td>John Doe</td>
+                                                        <td>INV-001</td>
+                                                        <td>₱187.50</td>
+                                                        <td>Dr. Smith</td>
+                                                    </tr>
+                                                    <tr>
+                                                        <td>2024-01-20 11:15:00</td>
+                                                        <td><span class="badge-red">Applied</span></td>
+                                                        <td>Vaccination Campaign</td>
+                                                        <td>Jane Smith</td>
+                                                        <td>INV-002</td>
+                                                        <td>₱25.00</td>
+                                                        <td>Nurse Johnson</td>
+                                                    </tr>
+                                                    <tr>
+                                                        <td>2024-01-19 16:45:00</td>
+                                                        <td><span class="badge-red">Removed</span></td>
+                                                        <td>Regular Patient Discount</td>
+                                                        <td>Robert Wilson</td>
+                                                        <td>INV-003</td>
+                                                        <td>-</td>
+                                                        <td>Admin Davis</td>
+                                                    </tr>
+                                                    <tr>
+                                                        <td>2024-01-19 09:20:00</td>
+                                                        <td><span class="badge-red">Applied</span></td>
+                                                        <td>Emergency Services Fee Waiver</td>
+                                                        <td>Sarah Brown</td>
+                                                        <td>INV-004</td>
+                                                        <td>₱100.00</td>
+                                                        <td>Dr. Miller</td>
+                                                    </tr>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

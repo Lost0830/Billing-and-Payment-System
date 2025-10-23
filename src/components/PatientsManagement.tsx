@@ -1,0 +1,1069 @@
+import { useEffect, useState } from "react";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
+import { Button } from "./ui/button";
+import { Input } from "./ui/input";
+import { Label } from "./ui/label";
+import { Badge } from "./ui/badge";
+import { Separator } from "./ui/separator";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "./ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
+import { 
+  Users, 
+  Search, 
+  Plus, 
+  Eye, 
+  Edit, 
+  Trash2, 
+  Phone, 
+  Mail, 
+  MapPin, 
+  Calendar,
+  Stethoscope,
+  Pill,
+  Receipt,
+  UserPlus,
+  FileText,
+  Activity
+} from "lucide-react";
+// import shared helpers and local service (use .js so Vite resolves the JS module)
+import { fetchPatients } from "../services/api.js";
+import * as patientService from "../services/patientService.js";
+import { toast } from "sonner";
+// normalize import shape (works whether patientService exports default or named)
+const ps: any = (patientService as any)?.default || (patientService as any) || {};
+
+// Use Vite-style env in the browser; fallback to localhost
+const API_URL = (import.meta as any)?.env?.VITE_API_URL || "http://localhost:5000/api";
+
+interface PatientsManagementProps {
+  onNavigateToView?: (view: string) => void;
+  userSession?: {
+    email: string;
+    name: string;
+    role: string;
+    system: string;
+  };
+}
+
+export function PatientsManagement({ onNavigateToView, userSession }: PatientsManagementProps) {
+  const [patients, setPatients] = useState([]);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedPatient, setSelectedPatient] = useState(null);
+  const [showPatientDialog, setShowPatientDialog] = useState(false);
+  const [showAddPatientDialog, setShowAddPatientDialog] = useState(false);
+  const [showAddServiceDialog, setShowAddServiceDialog] = useState(false);
+  const [showAddMedicineDialog, setShowAddMedicineDialog] = useState(false);
+  const [activeTab, setActiveTab] = useState("all");
+  const [editingPatientId, setEditingPatientId] = useState<string | null>(null);
+
+  // Form states
+  const [patientForm, setPatientForm] = useState({
+    name: "",
+    dateOfBirth: "",
+    sex: "",
+    contactNumber: "",
+    address: "",
+    email: "",
+    bloodType: "",
+    emergencyContactName: "",
+    emergencyContactRelationship: "",
+    emergencyContactPhone: ""
+  });
+
+  const [serviceForm, setServiceForm] = useState({
+    description: "",
+    category: "",
+    price: "",
+    attendingPhysician: "",
+    date: new Date().toISOString().split('T')[0]
+  });
+
+  const [medicineForm, setMedicineForm] = useState({
+    description: "",
+    quantity: "",
+    unitPrice: "",
+    prescribedBy: "",
+    date: new Date().toISOString().split('T')[0]
+  });
+
+  // Fetch patients from backend via shared API helper
+  const fetchPatientsFromDb = async () => {
+    try {
+      const data = await fetchPatients();
+      const normalized = data.map((p: any) => ({ ...p, id: p._id || p.id || p.patientId || "" }));
+      setPatients(normalized);
+    } catch (err) {
+      console.error("fetchPatientsFromDb error:", err);
+      setPatients([]);
+      toast.error("Failed to load patients");
+    }
+  };
+
+  useEffect(() => {
+    fetchPatientsFromDb();
+  }, []);
+  
+  const handleViewPatient = (patient) => {
+    setSelectedPatient(patient);
+    setShowPatientDialog(true);
+  };
+ 
+  // Create or update patient
+  const handleAddPatient = async () => {
+     if (!patientForm.name || !patientForm.dateOfBirth || !patientForm.sex) {
+       toast.error("Please fill in all required fields");
+       return;
+     }
+
+     const newPatient = {
+       name: patientForm.name,
+       dateOfBirth: patientForm.dateOfBirth,
+       sex: patientForm.sex,
+       contactNumber: patientForm.contactNumber,
+       address: patientForm.address,
+       email: patientForm.email,
+       bloodType: patientForm.bloodType,
+       emergencyContact: {
+         name: patientForm.emergencyContactName,
+         relationship: patientForm.emergencyContactRelationship,
+         phone: patientForm.emergencyContactPhone
+       },
+       createdBy: userSession?.name || 'Unknown',
+       createdByRole: userSession?.role || 'unknown',
+       createdAt: new Date().toISOString()
+     };
+
+     try {
+      if (editingPatientId) {
+        // update
+        await updatePatient(editingPatientId, newPatient);
+        toast.success("Patient updated");
+      } else {
+        // create
+        await createPatient(newPatient);
+        toast.success("Patient added successfully!");
+      }
+      setEditingPatientId(null);
+      await fetchPatientsFromDb();
+      setShowAddPatientDialog(false);
+      resetPatientForm();
+     } catch (err) {
+       console.error("Add patient failed:", err);
+       toast.error("Failed to add patient");
+     }
+   };
+
+  // Create -> POST /api/patients (improved error logging for non-JSON responses)
+  const createPatient = async (payload: any): Promise<any> => {
+    try {
+      const res = await fetch(`${API_URL}/patients`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const contentType = (res.headers.get("content-type") || "").toLowerCase();
+      let body: any;
+
+      if (contentType.includes("application/json")) {
+        body = await res.json();
+      } else {
+        const text = await res.text();
+        console.error("createPatient non-JSON response:", res.status, text);
+        throw new Error(`Server returned non-JSON response (status ${res.status}). See console.`);
+      }
+
+      console.log("createPatient response:", res.status, body);
+      if (!res.ok || !body.success) {
+        throw new Error(body?.message || `Create failed: ${res.status}`);
+      }
+
+      const created = { ...(body.data || {}), id: (body.data?.id || body.data?._id || "") };
+      setPatients((prev: any[]) => [created, ...prev]);
+
+      // sync patientService if exists
+      if (typeof (patientService as any).setPatients === "function") {
+        (patientService as any).setPatients([created, ...(patientService as any).getAllPatients?.() || []]);
+      }
+
+      return created;
+    } catch (e) {
+      console.error("createPatient error", e);
+      throw e;
+    }
+  };
+
+  // Update -> PUT /api/patients/:id
+  const updatePatient = async (id: string, payload: any): Promise<any> => {
+    try {
+      const res = await fetch(`${API_URL}/patients/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const body = await res.json();
+      console.log("updatePatient response:", res.status, body);
+      if (!res.ok || !body.success) throw new Error(body?.message || "Update failed");
+      const updated = { ...(body.data || {}), id: (body.data?.id || body.data?._id || id) };
+      setPatients((prev: any[]) => prev.map(p => (p.id === id || p._id === id ? updated : p)));
+      if (typeof (patientService as any).setPatients === "function") {
+        (patientService as any).setPatients((patientService as any).getAllPatients?.() || []);
+      }
+      return updated;
+    } catch (e) {
+      console.error("updatePatient error", e);
+      throw e;
+    }
+  };
+
+  // Delete -> DELETE /api/patients/:id (keep as-is but ensure it updates state)
+  const deletePatient = async (id: string) => {
+    try {
+      if (!window.confirm("Delete this patient? This cannot be undone.")) return;
+      const res = await fetch(`${API_URL}/patients/${id}`, { method: "DELETE" });
+      const body = await res.json();
+      console.log("deletePatient response:", res.status, body);
+      if (!res.ok || !body.success) throw new Error(body?.message || "Delete failed");
+      setPatients((prev: any[]) => prev.filter(p => p.id !== id && p._id !== id && p.patientId !== id));
+      toast.success("Patient deleted");
+    } catch (e) {
+      console.error("deletePatient error", e);
+      toast.error("Failed to delete patient");
+    }
+  };
+
+  const handleEditPatient = (patient: any) => {
+    setEditingPatientId(patient.id || patient._id || patient.patientId || null);
+    setPatientForm({
+      name: patient.name || "",
+      dateOfBirth: patient.dateOfBirth ? patient.dateOfBirth.split("T")[0] : "",
+      sex: patient.sex || "",
+      contactNumber: patient.contactNumber || "",
+      address: patient.address || "",
+      email: patient.email || "",
+      bloodType: patient.bloodType || "",
+      emergencyContactName: patient.emergencyContact?.name || "",
+      emergencyContactRelationship: patient.emergencyContact?.relationship || "",
+      emergencyContactPhone: patient.emergencyContact?.phone || ""
+    });
+    setShowAddPatientDialog(true);
+  };
+
+  const handleAddService = () => {
+    if (!serviceForm.description || !serviceForm.category || !serviceForm.price) {
+      toast.error("Please fill in all required fields");
+      return;
+    }
+
+    if (typeof ps.addService === "function") {
+      ps.addService(selectedPatient.id, {
+       description: serviceForm.description,
+       category: serviceForm.category,
+       price: parseFloat(serviceForm.price),
+       attendingPhysician: serviceForm.attendingPhysician,
+       date: serviceForm.date
+      });
+    } else {
+      console.warn("patientService.addService not available, skipping local update");
+    }
+
+    // Reload patient data
+    const updatedPatient = (typeof ps.getPatient === "function")
+      ? ps.getPatient(selectedPatient.id)
+      : selectedPatient;
+    setSelectedPatient(updatedPatient);
+    fetchPatientsFromDb();
+    setShowAddServiceDialog(false);
+    resetServiceForm();
+    toast.success("Service added successfully!");
+  };
+
+  const handleAddMedicine = () => {
+    if (!medicineForm.description || !medicineForm.quantity || !medicineForm.unitPrice) {
+      toast.error("Please fill in all required fields");
+      return;
+    }
+
+    if (typeof ps.addMedicine === "function") {
+      ps.addMedicine(selectedPatient.id, {
+       description: medicineForm.description,
+       quantity: parseInt(medicineForm.quantity),
+       unitPrice: parseFloat(medicineForm.unitPrice),
+       prescribedBy: medicineForm.prescribedBy,
+       date: medicineForm.date
+      });
+    } else {
+      console.warn("patientService.addMedicine not available, skipping local update");
+    }
+
+    // Reload patient data
+    const updatedPatient = (typeof ps.getPatient === "function")
+      ? ps.getPatient(selectedPatient.id)
+      : selectedPatient;
+    setSelectedPatient(updatedPatient);
+    fetchPatientsFromDb();
+    setShowAddMedicineDialog(false);
+    resetMedicineForm();
+    toast.success("Medicine added successfully!");
+  };
+
+  const resetPatientForm = () => {
+    setPatientForm({
+      name: "",
+      dateOfBirth: "",
+      sex: "",
+      contactNumber: "",
+      address: "",
+      email: "",
+      bloodType: "",
+      emergencyContactName: "",
+      emergencyContactRelationship: "",
+      emergencyContactPhone: ""
+    });
+  };
+
+  const resetServiceForm = () => {
+    setServiceForm({
+      description: "",
+      category: "",
+      price: "",
+      attendingPhysician: "",
+      date: new Date().toISOString().split('T')[0]
+    });
+  };
+
+  const resetMedicineForm = () => {
+    setMedicineForm({
+      description: "",
+      quantity: "",
+      unitPrice: "",
+      prescribedBy: "",
+      date: new Date().toISOString().split('T')[0]
+    });
+  };
+
+  const filteredPatients = patients.filter((patient: any) => {
+    const term = (searchQuery || "").toLowerCase();
+    const pid = (patient?.id || patient?._id || patient?.patientId || "").toString().toLowerCase();
+    const name = (patient?.name || "").toString().toLowerCase();
+    const contact = (patient?.contactNumber || "").toString().toLowerCase();
+    return pid.includes(term) || name.includes(term) || contact.includes(term);
+  });
+
+  const getPatientCharges = (patient) => {
+    const pid = patient?.id || patient?._id || patient?.patientId;
+    if (typeof ps.getPatientTotalCharges === "function" && pid) {
+      try {
+        return ps.getPatientTotalCharges(pid);
+      } catch (e) {
+        console.error("getPatientTotalCharges error", e);
+      }
+    }
+    return { total: 0, services: 0, medicines: 0, medicinesVAT: 0, subtotal: 0 };
+  };
+
+  return (
+    <div>
+      {/* Header */}
+      <div className="bg-[#358E83] rounded-lg p-6 mb-8">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-3xl font-semibold text-white mb-2">
+              Patient Management
+            </h2>
+            <p className="text-white/90">
+              {userSession?.role === 'admin' 
+                ? 'Create and manage patient records for the hospital system'
+                : 'View patient information, services, and pharmacy purchases'}
+            </p>
+          </div>
+          <Button
+            onClick={() => setShowAddPatientDialog(true)}
+            className="bg-[#E94D61] hover:bg-[#E94D61]/90 text-white"
+          >
+            <UserPlus className="mr-2 h-4 w-4" />
+            Add New Patient
+          </Button>
+        </div>
+      </div>
+
+      {/* Stats Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium text-gray-600 flex items-center">
+              <Users className="mr-2 h-4 w-4" />
+              Total Patients
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-3xl font-bold text-gray-900">{patients.length}</div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium text-gray-600 flex items-center">
+              <Stethoscope className="mr-2 h-4 w-4" />
+              Total Services
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-3xl font-bold text-gray-900">
+              {patients.reduce((sum, p) => sum + (p.services?.length || 0), 0)}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium text-gray-600 flex items-center">
+              <Pill className="mr-2 h-4 w-4" />
+              Total Medicines
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-3xl font-bold text-gray-900">
+              {patients.reduce((sum, p) => sum + (p.medicines?.length || 0), 0)}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium text-gray-600 flex items-center">
+              <Receipt className="mr-2 h-4 w-4" />
+              Total Charges
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-3xl font-bold text-gray-900">
+              ₱{patients.reduce((sum, p) => {
+                const charges = getPatientCharges(p);
+                return sum + (charges?.total || 0);
+              }, 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Patient List */}
+      <Card>
+        <CardHeader className="bg-[#358E83] text-white">
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="flex items-center">
+                <Users className="mr-2" size={20} />
+                Patient Records
+              </CardTitle>
+              <CardDescription className="text-white/80">
+                View and manage patient information and billing
+              </CardDescription>
+            </div>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={16} />
+              <Input
+                placeholder="Search patients..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-10 w-64 bg-white"
+              />
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="p-6">
+          <div className="space-y-4">
+            {filteredPatients.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">
+                <Users className="mx-auto mb-3 opacity-50" size={48} />
+                <p>No patients found</p>
+              </div>
+            ) : (
+              filteredPatients.map((patient, idx) => {
+                const pid = patient?.id || patient?._id || patient?.patientId || `p-${idx}`;
+                const charges = getPatientCharges(patient);
+                const age = (patient?.dateOfBirth && typeof ps.calculateAge === 'function')
+                  ? ps.calculateAge(patient.dateOfBirth)
+                  : "-";
+                
+                return (
+                  <div
+                    key={pid}
+                    className="border rounded-lg p-4 hover:shadow-md transition-shadow"
+                  >
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <div className="flex items-center space-x-3 mb-3">
+                          <div className="w-12 h-12 rounded-full bg-[#358E83] text-white flex items-center justify-center">
+                            <Users size={24} />
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <h4 className="font-semibold text-lg">{patient.name}</h4>
+                              {patient.createdByRole === 'admin' && (
+                                <Badge className="bg-blue-100 text-blue-800 hover:bg-blue-100 text-xs">
+                                  Admin Created
+                                </Badge>
+                              )}
+                            </div>
+                            <p className="text-sm text-gray-600">
+                              {patient.id} • {age} years old • {patient.sex}
+                              {patient.createdBy && (
+                                <span className="text-gray-500"> • Created by {patient.createdBy}</span>
+                              )}
+                            </p>
+                          </div>
+                        </div>
+                        
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                          <div>
+                            <p className="text-gray-500 flex items-center">
+                              <Phone size={14} className="mr-1" />
+                              Contact
+                            </p>
+                            <p className="font-medium">{patient.contactNumber || 'N/A'}</p>
+                          </div>
+                          <div>
+                            <p className="text-gray-500 flex items-center">
+                              <Activity size={14} className="mr-1" />
+                              Services
+                            </p>
+                            <p className="font-medium">{patient.services?.length || 0} services</p>
+                          </div>
+                          <div>
+                            <p className="text-gray-500 flex items-center">
+                              <Pill size={14} className="mr-1" />
+                              Medicines
+                            </p>
+                            <p className="font-medium">{patient.medicines?.length || 0} items</p>
+                          </div>
+                          <div>
+                            <p className="text-gray-500 flex items-center">
+                              <Receipt size={14} className="mr-1" />
+                              Total Charges
+                            </p>
+                            <p className="font-semibold text-[#358E83]">
+                              ₱{charges.total.toLocaleString('en-PH', { minimumFractionDigits: 2 })}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      <div className="ml-4 flex flex-col gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleViewPatient(patient)}
+                        >
+                          <Eye className="h-4 w-4 mr-2" />
+                          View Details
+                        </Button>
+                        <div className="flex gap-2 mt-2">
+                          <Button variant="ghost" size="sm" onClick={() => handleEditPatient(patient)}>
+                            <Edit className="h-4 w-4 mr-2" /> Edit
+                          </Button>
+                          <Button variant="destructive" size="sm" onClick={() => deletePatient(patient.id || patient._id || patient.patientId)}>
+                            <Trash2 className="h-4 w-4 mr-2" /> Delete
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Patient Details Dialog */}
+      <Dialog open={showPatientDialog} onOpenChange={setShowPatientDialog}>
+        <DialogContent className="max-w-3xl p-6">
+          <DialogHeader>
+            <DialogTitle className="text-2xl font-semibold">
+              Patient Details
+            </DialogTitle>
+            <DialogDescription>
+              View and manage patient information, services, and billing
+            </DialogDescription>
+          </DialogHeader>
+
+          {selectedPatient && (
+            <div>
+              {/* Patient Info */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                <div>
+                  <Label className="text-sm font-medium">Patient ID</Label>
+                  <p className="text-lg font-semibold text-gray-900">
+                    {selectedPatient.id || selectedPatient._id}
+                  </p>
+                </div>
+                <div>
+                  <Label className="text-sm font-medium">Name</Label>
+                  <p className="text-lg font-semibold text-gray-900">
+                    {selectedPatient.name}
+                  </p>
+                </div>
+                <div>
+                  <Label className="text-sm font-medium">Date of Birth</Label>
+                  <p className="text-lg font-semibold text-gray-900">
+                    {selectedPatient.dateOfBirth ? new Date(selectedPatient.dateOfBirth).toLocaleDateString() : 'N/A'}
+                  </p>
+                </div>
+                <div>
+                  <Label className="text-sm font-medium">Sex</Label>
+                  <p className="text-lg font-semibold text-gray-900">
+                    {selectedPatient.sex}
+                  </p>
+                </div>
+                <div>
+                  <Label className="text-sm font-medium">Contact Number</Label>
+                  <p className="text-lg font-semibold text-gray-900">
+                    {selectedPatient.contactNumber || 'N/A'}
+                  </p>
+                </div>
+                <div>
+                  <Label className="text-sm font-medium">Email</Label>
+                  <p className="text-lg font-semibold text-gray-900">
+                    {selectedPatient.email || 'N/A'}
+                  </p>
+                </div>
+                <div>
+                  <Label className="text-sm font-medium">Address</Label>
+                  <p className="text-lg font-semibold text-gray-900">
+                    {selectedPatient.address || 'N/A'}
+                  </p>
+                </div>
+                <div>
+                  <Label className="text-sm font-medium">Blood Type</Label>
+                  <p className="text-lg font-semibold text-gray-900">
+                    {selectedPatient.bloodType || 'N/A'}
+                  </p>
+                </div>
+              </div>
+
+              <Separator className="my-6" />
+
+              {/* Emergency Contact */}
+              <div className="mb-6">
+                <Label className="text-sm font-medium">Emergency Contact</Label>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-sm text-gray-500">Name</p>
+                    <p className="text-lg font-semibold text-gray-900">
+                      {selectedPatient.emergencyContact?.name || 'N/A'}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-500">Relationship</p>
+                    <p className="text-lg font-semibold text-gray-900">
+                      {selectedPatient.emergencyContact?.relationship || 'N/A'}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-500">Phone</p>
+                    <p className="text-lg font-semibold text-gray-900">
+                      {selectedPatient.emergencyContact?.phone || 'N/A'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <Separator className="my-6" />
+
+              {/* Services and Medicines */}
+              <div className="mb-6">
+                <Label className="text-sm font-medium">Services and Medicines</Label>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-sm text-gray-500">Total Services</p>
+                    <p className="text-lg font-semibold text-gray-900">
+                      {selectedPatient.services?.length || 0} services
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-500">Total Medicines</p>
+                    <p className="text-lg font-semibold text-gray-900">
+                      {selectedPatient.medicines?.length || 0} items
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-500">Total Charges</p>
+                    <p className="text-lg font-semibold text-gray-900">
+                      ₱{getPatientCharges(selectedPatient).total.toLocaleString('en-PH', { minimumFractionDigits: 2 })}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-col md:flex-row gap-4">
+                <Button
+                  onClick={() => {
+                    setShowPatientDialog(false);
+                    handleEditPatient(selectedPatient);
+                  }}
+                  className="flex-1"
+                >
+                  <Edit className="mr-2 h-4 w-4" />
+                  Edit Patient
+                </Button>
+                <Button
+                  variant="destructive"
+                  onClick={() => deletePatient(selectedPatient.id || selectedPatient._id || selectedPatient.patientId)}
+                  className="flex-1"
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Delete Patient
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Add Patient Dialog */}
+      <Dialog open={showAddPatientDialog} onOpenChange={setShowAddPatientDialog}>
+        <DialogContent className="max-w-md p-6">
+          <DialogHeader>
+            <DialogTitle className="text-2xl font-semibold">
+              {editingPatientId ? "Edit Patient" : "Add New Patient"}
+            </DialogTitle>
+            <DialogDescription>
+              {editingPatientId 
+                ? "Update the patient details and save changes"
+                : "Enter the patient details to add a new record"}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid grid-cols-1 gap-4">
+            <div>
+              <Label htmlFor="name" className="text-sm font-medium">Name</Label>
+              <Input
+                id="name"
+                value={patientForm.name}
+                onChange={(e) => setPatientForm({ ...patientForm, name: e.target.value })}
+                placeholder="Enter patient's full name"
+                className="mt-1"
+              />
+            </div>
+
+            <div>
+              <Label htmlFor="dateOfBirth" className="text-sm font-medium">Date of Birth</Label>
+              <Input
+                id="dateOfBirth"
+                type="date"
+                value={patientForm.dateOfBirth}
+                onChange={(e) => setPatientForm({ ...patientForm, dateOfBirth: e.target.value })}
+                className="mt-1"
+              />
+            </div>
+
+            <div>
+              <Label htmlFor="sex" className="text-sm font-medium">Sex</Label>
+              <Select
+                id="sex"
+                value={patientForm.sex}
+                onValueChange={(value) => setPatientForm({ ...patientForm, sex: value })}
+                className="mt-1"
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select sex" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="male">Male</SelectItem>
+                  <SelectItem value="female">Female</SelectItem>
+                  <SelectItem value="other">Other</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div>
+              <Label htmlFor="contactNumber" className="text-sm font-medium">Contact Number</Label>
+              <Input
+                id="contactNumber"
+                value={patientForm.contactNumber}
+                onChange={(e) => setPatientForm({ ...patientForm, contactNumber: e.target.value })}
+                placeholder="Enter contact number"
+                className="mt-1"
+              />
+            </div>
+
+            <div>
+              <Label htmlFor="address" className="text-sm font-medium">Address</Label>
+              <Input
+                id="address"
+                value={patientForm.address}
+                onChange={(e) => setPatientForm({ ...patientForm, address: e.target.value })}
+                placeholder="Enter address"
+                className="mt-1"
+              />
+            </div>
+
+            <div>
+              <Label htmlFor="email" className="text-sm font-medium">Email</Label>
+              <Input
+                id="email"
+                type="email"
+                value={patientForm.email}
+                onChange={(e) => setPatientForm({ ...patientForm, email: e.target.value })}
+                placeholder="Enter email address"
+                className="mt-1"
+              />
+            </div>
+
+            <div>
+              <Label htmlFor="bloodType" className="text-sm font-medium">Blood Type</Label>
+              <Select
+                id="bloodType"
+                value={patientForm.bloodType}
+                onValueChange={(value) => setPatientForm({ ...patientForm, bloodType: value })}
+                className="mt-1"
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select blood type" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="A+">A+</SelectItem>
+                  <SelectItem value="A-">A-</SelectItem>
+                  <SelectItem value="B+">B+</SelectItem>
+                  <SelectItem value="B-">B-</SelectItem>
+                  <SelectItem value="AB+">AB+</SelectItem>
+                  <SelectItem value="AB-">AB-</SelectItem>
+                  <SelectItem value="O+">O+</SelectItem>
+                  <SelectItem value="O-">O-</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div>
+              <Label htmlFor="emergencyContactName" className="text-sm font-medium">Emergency Contact Name</Label>
+              <Input
+                id="emergencyContactName"
+                value={patientForm.emergencyContactName}
+                onChange={(e) => setPatientForm({ ...patientForm, emergencyContactName: e.target.value })}
+                placeholder="Enter emergency contact name"
+                className="mt-1"
+              />
+            </div>
+
+            <div>
+              <Label htmlFor="emergencyContactRelationship" className="text-sm font-medium">Relationship</Label>
+              <Input
+                id="emergencyContactRelationship"
+                value={patientForm.emergencyContactRelationship}
+                onChange={(e) => setPatientForm({ ...patientForm, emergencyContactRelationship: e.target.value })}
+                placeholder="Enter relationship to emergency contact"
+                className="mt-1"
+              />
+            </div>
+
+            <div>
+              <Label htmlFor="emergencyContactPhone" className="text-sm font-medium">Emergency Contact Phone</Label>
+              <Input
+                id="emergencyContactPhone"
+                value={patientForm.emergencyContactPhone}
+                onChange={(e) => setPatientForm({ ...patientForm, emergencyContactPhone: e.target.value })}
+                placeholder="Enter emergency contact phone"
+                className="mt-1"
+              />
+            </div>
+          </div>
+
+          <div className="mt-6 flex justify-end gap-4">
+            <Button
+              variant="outline"
+              onClick={() => setShowAddPatientDialog(false)}
+              className="flex-1"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleAddPatient}
+              className="flex-1 bg-[#358E83] hover:bg-[#358E83]/90 text-white"
+            >
+              {editingPatientId ? "Save Changes" : "Add Patient"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add Service Dialog */}
+      <Dialog open={showAddServiceDialog} onOpenChange={setShowAddServiceDialog}>
+        <DialogContent className="max-w-md p-6">
+          <DialogHeader>
+            <DialogTitle className="text-2xl font-semibold">
+              Add Service
+            </DialogTitle>
+            <DialogDescription>
+              Enter the service details to add to the patient's record
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid grid-cols-1 gap-4">
+            <div>
+              <Label htmlFor="description" className="text-sm font-medium">Description</Label>
+              <Input
+                id="description"
+                value={serviceForm.description}
+                onChange={(e) => setServiceForm({ ...serviceForm, description: e.target.value })}
+                placeholder="Enter service description"
+                className="mt-1"
+              />
+            </div>
+
+            <div>
+              <Label htmlFor="category" className="text-sm font-medium">Category</Label>
+              <Input
+                id="category"
+                value={serviceForm.category}
+                onChange={(e) => setServiceForm({ ...serviceForm, category: e.target.value })}
+                placeholder="Enter service category"
+                className="mt-1"
+              />
+            </div>
+
+            <div>
+              <Label htmlFor="price" className="text-sm font-medium">Price</Label>
+              <Input
+                id="price"
+                type="number"
+                value={serviceForm.price}
+                onChange={(e) => setServiceForm({ ...serviceForm, price: e.target.value })}
+                placeholder="Enter service price"
+                className="mt-1"
+              />
+            </div>
+
+            <div>
+              <Label htmlFor="attendingPhysician" className="text-sm font-medium">Attending Physician</Label>
+              <Input
+                id="attendingPhysician"
+                value={serviceForm.attendingPhysician}
+                onChange={(e) => setServiceForm({ ...serviceForm, attendingPhysician: e.target.value })}
+                placeholder="Enter attending physician's name"
+                className="mt-1"
+              />
+            </div>
+
+            <div>
+              <Label htmlFor="date" className="text-sm font-medium">Date</Label>
+              <Input
+                id="date"
+                type="date"
+                value={serviceForm.date}
+                onChange={(e) => setServiceForm({ ...serviceForm, date: e.target.value })}
+                className="mt-1"
+              />
+            </div>
+          </div>
+
+          <div className="mt-6 flex justify-end gap-4">
+            <Button
+              variant="outline"
+              onClick={() => setShowAddServiceDialog(false)}
+              className="flex-1"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleAddService}
+              className="flex-1 bg-[#358E83] hover:bg-[#358E83]/90 text-white"
+            >
+              Add Service
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add Medicine Dialog */}
+      <Dialog open={showAddMedicineDialog} onOpenChange={setShowAddMedicineDialog}>
+        <DialogContent className="max-w-md p-6">
+          <DialogHeader>
+            <DialogTitle className="text-2xl font-semibold">
+              Add Medicine
+            </DialogTitle>
+            <DialogDescription>
+              Enter the medicine details to add to the patient's record
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid grid-cols-1 gap-4">
+            <div>
+              <Label htmlFor="medicineDescription" className="text-sm font-medium">Description</Label>
+              <Input
+                id="medicineDescription"
+                value={medicineForm.description}
+                onChange={(e) => setMedicineForm({ ...medicineForm, description: e.target.value })}
+                placeholder="Enter medicine description"
+                className="mt-1"
+              />
+            </div>
+
+            <div>
+              <Label htmlFor="quantity" className="text-sm font-medium">Quantity</Label>
+              <Input
+                id="quantity"
+                type="number"
+                value={medicineForm.quantity}
+                onChange={(e) => setMedicineForm({ ...medicineForm, quantity: e.target.value })}
+                placeholder="Enter quantity"
+                className="mt-1"
+              />
+            </div>
+
+            <div>
+              <Label htmlFor="unitPrice" className="text-sm font-medium">Unit Price</Label>
+              <Input
+                id="unitPrice"
+                type="number"
+                value={medicineForm.unitPrice}
+                onChange={(e) => setMedicineForm({ ...medicineForm, unitPrice: e.target.value })}
+                placeholder="Enter unit price"
+                className="mt-1"
+              />
+            </div>
+
+            <div>
+              <Label htmlFor="prescribedBy" className="text-sm font-medium">Prescribed By</Label>
+              <Input
+                id="prescribedBy"
+                value={medicineForm.prescribedBy}
+                onChange={(e) => setMedicineForm({ ...medicineForm, prescribedBy: e.target.value })}
+                placeholder="Enter prescriber's name"
+                className="mt-1"
+              />
+            </div>
+
+            <div>
+              <Label htmlFor="medicineDate" className="text-sm font-medium">Date</Label>
+              <Input
+                id="medicineDate"
+                type="date"
+                value={medicineForm.date}
+                onChange={(e) => setMedicineForm({ ...medicineForm, date: e.target.value })}
+                className="mt-1"
+              />
+            </div>
+          </div>
+
+          <div className="mt-6 flex justify-end gap-4">
+            <Button
+              variant="outline"
+              onClick={() => setShowAddMedicineDialog(false)}
+              className="flex-1"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleAddMedicine}
+              className="flex-1 bg-[#358E83] hover:bg-[#358E83]/90 text-white"
+            >
+              Add Medicine
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}

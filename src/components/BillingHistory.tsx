@@ -306,7 +306,7 @@ export function BillingHistory() {
 
       {/* Details Dialog */}
       <Dialog open={showDetailsDialog} onOpenChange={setShowDetailsDialog}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="w-[95vw] max-w-2xl p-6">
           <DialogHeader>
             <DialogTitle>Transaction Details</DialogTitle>
             <DialogDescription>

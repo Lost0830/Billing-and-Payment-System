@@ -579,7 +579,7 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
 
       {/* Patient Details Dialog */}
       <Dialog open={showPatientDialog} onOpenChange={setShowPatientDialog}>
-        <DialogContent className="max-w-3xl p-6">
+        <DialogContent className="w-[95vw] max-w-4xl p-6">
           <DialogHeader>
             <DialogTitle className="text-2xl font-semibold">
               Patient Details

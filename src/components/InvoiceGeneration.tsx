@@ -104,6 +104,7 @@ export function InvoiceGeneration({ onNavigateToView }: InvoiceGenerationProps) 
   const [showReceiptDialog, setShowReceiptDialog] = useState(false);
   const [generatedInvoice, setGeneratedInvoice] = useState<Invoice | null>(null);
   const [openPatientCombobox, setOpenPatientCombobox] = useState(false);
+  const [patientSearch, setPatientSearch] = useState("");
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [invoiceToDelete, setInvoiceToDelete] = useState<string | null>(null);
   
@@ -655,13 +656,20 @@ const confirmDeleteInvoice = async () => {
                       <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                     </Button>
                   </PopoverTrigger>
-                  <PopoverContent className="w-full p-0">
+                  <PopoverContent className="w-screen max-w-[95vw] p-0 left-1/2 transform -translate-x-1/2">
                     <Command>
-                      <CommandInput placeholder="Search by patient name or ID..." />
+                      <CommandInput
+                        placeholder="Search by patient name or ID..."
+                        value={patientSearch}
+                        onChange={(e: any) => setPatientSearch(e.target.value)}
+                      />
                       <CommandList>
                         <CommandEmpty>No patient found.</CommandEmpty>
                         <CommandGroup>
-                          {PREDEFINED_PATIENTS.map((patient) => {
+                          {PREDEFINED_PATIENTS.filter(p => {
+                            const q = (patientSearch || "").toLowerCase();
+                            return q === "" || p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q);
+                          }).map((patient) => {
                             const hasEmrData = MockEmrService.hasUnbilledServices(patient.id);
                             const emrData = MockEmrService.getPatientEmrData(patient.id);
                             return (
@@ -698,6 +706,7 @@ const confirmDeleteInvoice = async () => {
                                 }
                                 
                                 setOpenPatientCombobox(false);
+                                setPatientSearch("");
                               }}
                             >
                               <Check
@@ -1042,7 +1051,7 @@ const confirmDeleteInvoice = async () => {
 
       {/* Receipt Dialog */}
       <Dialog open={showReceiptDialog} onOpenChange={setShowReceiptDialog}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto receipt-dialog">
+        <DialogContent className="max-w-full w-[96vw] max-h-[96vh] overflow-y-auto receipt-dialog p-6">
           <DialogHeader>
             <DialogTitle className="flex items-center justify-between">
               <span>Invoice Receipt</span>

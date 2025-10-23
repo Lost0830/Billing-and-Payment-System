@@ -74,6 +74,7 @@ export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('');
   const [showProcessForm, setShowProcessForm] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [invoiceSearch, setInvoiceSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState('all');
   const [isProcessing, setIsProcessing] = useState(false);
   const [availableInvoices, setAvailableInvoices] = useState<any[]>([]);
@@ -577,9 +578,10 @@ const isTaxableItem = (item: any): boolean => {
                 <CardDescription className="text-white/80">View and manage payment transactions</CardDescription>
               </div>
               <div className="flex space-x-3">
-                <div className="relative">
+                <div className="relative flex items-center">
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={16} />
                   <Input placeholder="Search payments..." value={searchQuery} onChange={(e)=>setSearchQuery(e.target.value)} className="pl-10 w-64 bg-white" />
+                  <span className="ml-3 text-sm text-white/80 bg-black/10 px-2 py-1 rounded">{filterStatus === 'all' ? 'All' : filterStatus}</span>
                 </div>
                 <Select value={filterStatus} onValueChange={setFilterStatus}>
                   <SelectTrigger className="w-40 bg-white"><SelectValue placeholder="Filter by status" /></SelectTrigger>
@@ -672,11 +674,16 @@ const isTaxableItem = (item: any): boolean => {
                   </PopoverTrigger>
                   <PopoverContent className="w-screen max-w-[95vw] p-0 left-1/2 transform -translate-x-1/2">
                     <Command>
-                      <CommandInput className="w-full text-lg py-3" placeholder="Search by invoice number or patient..." />
+                      <CommandInput className="w-full text-lg py-3" placeholder="Search by invoice number or patient..." value={invoiceSearch} onChange={(e:any)=>setInvoiceSearch(e.target.value)} />
                       <CommandList>
                         <CommandEmpty>No invoice found.</CommandEmpty>
                         <CommandGroup>
-                          {availableInvoices.map((invoice) => (
+                          {availableInvoices.filter(inv => {
+                            const q = (invoiceSearch || "").toLowerCase();
+                            const num = (inv.number || inv.invoiceNumber || inv._id || "").toString().toLowerCase();
+                            const pname = (inv.patientName || inv.patient || "").toString().toLowerCase();
+                            return q === "" || num.includes(q) || pname.includes(q);
+                          }).map((invoice) => (
                             <CommandItem
                               key={invoice.number || invoice.invoiceNumber || invoice._id || invoice.id}
                               value={`${invoice.number || invoice.invoiceNumber || invoice._id || ""} ${invoice.patientName || invoice.patient || ""}`}
@@ -711,6 +718,7 @@ const isTaxableItem = (item: any): boolean => {
                                 } else { setDiscountValue(""); setDiscountLabel(""); }
 
                                 setOpenInvoiceCombobox(false);
+                                setInvoiceSearch("");
                                 toast.success(`Invoice ${invoiceId} selected`);
                               }}
                             >

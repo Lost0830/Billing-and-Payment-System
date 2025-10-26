@@ -105,6 +105,7 @@ export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
 
   // patients state to fetch demographics from DB
   const [patients, setPatients] = useState<any[]>([]);
+  const [dynamicDiscounts, setDynamicDiscounts] = useState<DiscountOption[]>([]);
 
   // normalize server payment
   const normalizePayment = (p: any) => {
@@ -239,6 +240,23 @@ export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
     };
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Load discounts and listen for admin changes so payments reflect new discounts immediately
+  useEffect(() => {
+    const loadDiscounts = () => {
+      try {
+        const list = DiscountService.getActiveDiscounts();
+        setDynamicDiscounts(list || []);
+      } catch (err) {
+        console.error('Failed to load discounts', err);
+      }
+    };
+
+    loadDiscounts();
+    const handler = () => loadDiscounts();
+    window.addEventListener('discounts-updated', handler as EventListener);
+    return () => window.removeEventListener('discounts-updated', handler as EventListener);
   }, []);
 
   // helper to get patient age & sex from patients state
@@ -768,7 +786,7 @@ const isTaxableItem = (item: any): boolean => {
                         <CommandList>
                           <CommandEmpty>No discount found.</CommandEmpty>
                           <CommandGroup>
-                            {DiscountService.getActiveDiscounts().map(discount => (
+                            {dynamicDiscounts.map(discount => (
                               <CommandItem key={discount.id} value={`${discount.name} ${discount.code}`} onSelect={() => { setSelectedDiscount(discount); setOpenDiscountCombobox(false); toast.success(`${discount.name} selected`); }}>
                                 <div className="flex items-center justify-between w-full">
                                   <div>

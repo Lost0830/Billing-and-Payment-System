@@ -23,6 +23,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Badge } from "./ui/badge";
 import { Separator } from "./ui/separator";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "./ui/dialog";
+// Dialog will handle portaling; no direct createPortal usage
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "./ui/alert-dialog";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "./ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
@@ -100,6 +101,7 @@ export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
   const [processedPayment, setProcessedPayment] = useState<Payment | null>(null);
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [showReceiptDialog, setShowReceiptDialog] = useState(false);
+  // receipt dialog is rendered via Dialog component (matches InvoiceGeneration)
   const [paymentToDelete, setPaymentToDelete] = useState<string | null>(null);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
 
@@ -242,6 +244,8 @@ export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Dialog component will handle portaling and focus management. No custom portal needed.
+
   // Load discounts and listen for admin changes so payments reflect new discounts immediately
   useEffect(() => {
     const loadDiscounts = () => {
@@ -278,6 +282,74 @@ export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
     return { age, sex };
   };
 
+  // prefer demographics from a processed payment (embedded patient object) then fallback to patients list
+  const getDemographicsForPayment = (p: Payment | null) => {
+    if (!p) return { age: 0, sex: 'Unknown' };
+
+    // Try common embedded patient shapes in the payment raw object
+    const raw = (p.raw && (p.raw.patient || p.raw.patientInfo || p.raw.patientDetails)) || p.raw;
+    if (raw && typeof raw === 'object') {
+      // try multiple possible dob field names
+      const dob = raw.dateOfBirth || raw.birthDate || raw.dob || raw.birth_date || raw.birthdate;
+      let age = 0;
+      if (dob) {
+        const b = new Date(dob);
+        if (!isNaN(b.getTime())) {
+          const today = new Date();
+          age = today.getFullYear() - b.getFullYear();
+          const mo = today.getMonth() - b.getMonth();
+          if (mo < 0 || (mo === 0 && today.getDate() < b.getDate())) age--;
+        }
+      }
+      const sex = (raw.gender || raw.sex || raw.sexAssignedAtBirth || raw.gender_identity || 'Unknown');
+      if (age || sex !== 'Unknown') return { age: age || 0, sex };
+    }
+
+    // fallback: try to find patient from loaded patients list by id, _id, patientId or by name
+    const byId = getPatientDemographics(p.patientId || '');
+    if (byId && (byId.age && byId.age > 0 || (byId.sex && byId.sex !== 'Unknown'))) return byId;
+
+    // as an extra fallback, try to match by patientName (case-insensitive)
+    if (p.patientName) {
+      const match = patients.find((x:any) => {
+        const name = (x.name || `${x.firstName || ''} ${x.lastName || ''}`).toString().toLowerCase();
+        return name && name.includes((p.patientName || '').toString().toLowerCase());
+      });
+      if (match) {
+        const dob = match.birthDate || match.dateOfBirth || match.birthdate;
+        let age = 0;
+        if (dob) {
+          const b = new Date(dob);
+          if (!isNaN(b.getTime())) {
+            const today = new Date();
+            age = today.getFullYear() - b.getFullYear();
+            const mo = today.getMonth() - b.getMonth();
+            if (mo < 0 || (mo === 0 && today.getDate() < b.getDate())) age--;
+          }
+        }
+        const sex = match.gender || match.sex || 'Unknown';
+        return { age: age || 0, sex };
+      }
+    }
+
+    return { age: 0, sex: 'Unknown' };
+  };
+
+  // helper to find a sensible 'date issued' or invoice date for the receipt
+  const formatIssuedDate = (p: Payment | null) => {
+    if (!p) return 'N/A';
+  const raw = (p as any).raw || {};
+  const candidates = [raw.invoiceDate, raw.dateIssued, raw.issuedAt, raw.paymentDate, p.date, raw.createdAt, raw.date];
+    for (const c of candidates) {
+      if (!c) continue;
+      const d = new Date(c);
+      if (!isNaN(d.getTime())) {
+        return d.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+      }
+    }
+    return 'N/A';
+  };
+
   // recalc amount when subtotal/discount changes
   useEffect(() => {
     if (!subtotalAmount) {
@@ -296,9 +368,9 @@ export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
     let taxAmt = 0;
     const inv = availableInvoices.find(iv => (iv.number === selectedInvoiceNumber) || (iv.invoiceNumber === selectedInvoiceNumber) || (iv._id === selectedInvoiceNumber));
     if (inv && Array.isArray(inv.items)) {
-      const taxable = inv.items.filter((it:any)=>isTaxableItem(it)).reduce((s:number,it:any)=> s + (it.totalPrice || it.amount || 0), 0);
+      const taxable = inv.items.filter((it:any)=>isTaxableItem(it)).reduce((s:number,it:any)=> s + (Number(it.totalPrice || it.amount || it.price || 0)), 0);
       if (taxable > 0) {
-        const taxableAfterDiscount = subtotal > 0 ? taxable - (discountAmt * (taxable / subtotal)) : taxable;
+        const taxableAfterDiscount = subtotal > 0 ? Math.max(0, taxable - (discountAmt * (taxable / subtotal))) : taxable;
         taxAmt = taxableAfterDiscount * 0.12;
       }
     }
@@ -346,19 +418,33 @@ export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
         return;
       }
 
-      const amountValue = parseFloat(newPayment.amount as unknown as string) || parseFloat(subtotalAmount || "0") || 0;
+      // determine amount to pay from newPayment.amount or subtotalAmount; if missing, compute from invoice items
+      let amountValue = parseFloat(String(newPayment.amount || "")) || parseFloat(subtotalAmount || "0") || 0;
+      if ((!amountValue || amountValue === 0) && selInvoice) {
+        // compute subtotal from items if available
+        const items = Array.isArray(selInvoice.items) ? selInvoice.items : (selInvoice.lines || []);
+        const computed = items.reduce((s:number,it:any) => s + Number(it.totalPrice ?? it.amount ?? it.price ?? 0), 0);
+        amountValue = computed || amountValue;
+      }
       const method = selectedPaymentMethod || newPayment.method || "cash";
-      const note = (newPayment.reference || newPayment.notes || "").toString();
+  const note = (newPayment.reference || "").toString();
 
       // include patientName/patientId when possible
       const paymentPayload = {
         invoiceId,
         invoiceNumber: selectedInvoiceNumber || selInvoice?.number || selInvoice?.invoiceNumber,
-        patientId: newPayment.patientId || selInvoice?.patientId || selInvoice?.accountId,
-        patientName: newPayment.patientName || selInvoice?.patientName || (() => {
-          const p = patients.find((x: any) => x._id === (selInvoice?.patientId) || x.id === (selInvoice?.patientId));
-          return p ? (p.name || `${p.firstName || ""} ${p.lastName || ""}`.trim()) : selInvoice?.patientName || selInvoice?.patient;
-        })(),
+        patientId: (newPayment.patientId || (selInvoice && (selInvoice.patientId || selInvoice.accountId)) || undefined),
+        patientName: (newPayment.patientName || (() => {
+          // invoice may embed patient object or just id/name fields
+          if (!selInvoice) return '';
+          if (selInvoice.patientName) return selInvoice.patientName;
+          if (selInvoice.patient && typeof selInvoice.patient === 'string') return selInvoice.patient;
+          if (selInvoice.patient && typeof selInvoice.patient === 'object') return selInvoice.patient.name || `${selInvoice.patient.firstName || ''} ${selInvoice.patient.lastName || ''}`.trim();
+          // fallback: try to resolve from patients list
+          const pid = selInvoice.patientId || selInvoice.accountId || (selInvoice.patient && selInvoice.patient._id);
+          const p = patients.find((x: any) => x._id === pid || x.id === pid || x.patientId === pid);
+          return p ? (p.name || `${p.firstName || ''} ${p.lastName || ''}`.trim()) : (selInvoice.patientName || selInvoice.patient || '');
+        })()),
         amount: amountValue,
         method,
         status: "completed",
@@ -367,14 +453,23 @@ export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
         note
       };
 
+      // determine items + subtotal from selected invoice as fallback
+      const itemsFromInvoice = selInvoice ? (Array.isArray(selInvoice.items) ? selInvoice.items : (selInvoice.lines || [])) : [];
+      const computedSubtotal = (itemsFromInvoice && itemsFromInvoice.length > 0)
+        ? itemsFromInvoice.reduce((s:number,it:any) => s + Number(it.totalPrice ?? it.amount ?? it.price ?? 0), 0)
+        : (parseFloat(subtotalAmount || '0') || amountValue || 0);
+
+      // include items/subtotal in payload so backend (or our local state) can preserve them for receipt
+      const payloadWithItems = { ...paymentPayload, items: itemsFromInvoice, subtotal: computedSubtotal };
+
       // create payment (local createPayment uses axios and returns axios response)
-      const createdResp = await createPayment(paymentPayload);
+      const createdResp = await createPaymentApi(payloadWithItems);
       const createdData = createdResp?.data || createdResp;
       console.debug("Payment create response:", createdData);
 
-      if (!(createdResp?.status === 200 || createdResp?.status === 201 || createdData?.success)) {
+      if (!((createdResp as any)?.status === 200 || (createdResp as any)?.status === 201 || (createdData as any)?.success)) {
         // some backends return the object directly
-        if (!createdData || !createdData._id && !createdData.id && !createdData.data) {
+        if (!(createdData) || (!((createdData as any)._id) && !((createdData as any).id) && !((createdData as any).data))) {
           throw new Error("Payment creation failed");
         }
       }
@@ -392,8 +487,25 @@ export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
       }
 
       // normalize created payment and update local state
-      const createdPaymentObj = (createdData.data) ? createdData.data : (createdData._id ? createdData : createdData);
+  const createdPaymentObj = ((createdData as any).data) ? (createdData as any).data : (((createdData as any)._id) ? createdData : createdData);
       const normalized = normalizePayment(createdPaymentObj);
+
+      // if backend didn't return items/subtotal, merge from selInvoice so receipt shows correct line items
+      if ((Array.isArray(normalized.items) && normalized.items.length === 0) && itemsFromInvoice && itemsFromInvoice.length > 0) {
+        normalized.items = itemsFromInvoice;
+      }
+      if (!normalized.subtotal || normalized.subtotal === 0) {
+        normalized.subtotal = computedSubtotal;
+      }
+      if (!normalized.patientId && payloadWithItems.patientId) normalized.patientId = payloadWithItems.patientId;
+      if ((!normalized.patientName || normalized.patientName === '') && payloadWithItems.patientName) normalized.patientName = payloadWithItems.patientName;
+      // attach cash received and change when paying by cash so receipt can show them
+      if (method === 'cash') {
+        const cashRec = Number(cashReceived || 0);
+        (normalized as any).cashReceived = (normalized as any).cashReceived || cashRec;
+        const paid = Number(normalized.amount || normalized.subtotal || 0);
+        (normalized as any).change = Math.max(0, cashRec - paid);
+      }
       setPayments(prev => [normalized, ...prev]);
       setProcessedPayment(normalized);
 
@@ -433,47 +545,48 @@ export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
           <meta charset="utf-8" />
           <title>Payment Receipt - MediCare Hospital</title>
           <style>
-            @page {
-              size: 80mm auto; /* fits thermal printer */
-              margin: 8mm;
-            }
+            @page { size: A4 landscape; margin: 18mm; }
+            /* Printed typography tuned to match hospital receipt */
             body {
-              font-family: Arial, sans-serif;
+              font-family: 'Times New Roman', Georgia, serif;
               color: #000;
               background: #fff;
-              font-size: 11px;
+              font-size: 12px;
               margin: 0;
               padding: 0;
+              -webkit-print-color-adjust: exact;
             }
             .receipt-container {
-              width: 80mm;
+              max-width: 1100px;
               margin: 0 auto;
+              padding: 8px 12px;
             }
-            table {
-              width: 100%;
-              border-collapse: collapse;
-              margin-top: 6px;
-            }
-            th, td {
-              border: 1px solid #ccc;
-              padding: 2px 4px;
-            }
-            th {
-              background: #f3f4f6;
-              font-weight: bold;
-            }
-            .text-right { text-align: right; }
-            .text-center { text-align: center; }
-            h1 {
-              color: #358E83;
-              text-align: center;
-              font-size: 14px;
-              margin-bottom: 4px;
-            }
+            header .hospital-name { font-size: 22px; font-weight: 700; letter-spacing: 0.5px; }
+            header .hospital-meta { font-size: 11px; color: #333; margin-top: 4px; }
+
+            table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+            thead th { padding: 8px 6px; border-bottom: 2px solid #000; font-weight: 700; text-transform: uppercase; font-size: 12px; }
+            tbody td { padding: 8px 6px; border-bottom: 1px solid #ddd; vertical-align: middle; }
+            td.description { font-size: 12px; }
+            td.amount, .text-right { text-align: right; }
+
+            .category-row td { font-weight: 600; }
+            .totals-row td { font-weight: 700; border-top: 2px solid #000; }
+
+            .grand-total { margin-top: 10px; text-align: right; font-size: 18px; font-weight: 800; }
+
+            .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+            .meta-grid .left, .meta-grid .right { font-size: 12px; }
+
+            .payment-details { margin-top: 14px; border-top: 1px solid #ccc; padding-top: 8px; font-size: 12px; }
+            .payment-details .label { color: #333; font-weight: 600; }
+            .payment-details .value { text-align: right; }
+
+            .footer { margin-top: 18px; text-align: center; font-size: 11px; color: #333; }
           </style>
         </head>
         <body>
-          <div class="receipt-container">
+          <div class="receipt-container small" style="max-width:1100px; margin:0 auto;">
             ${receiptContent.innerHTML}
           </div>
         </body>
@@ -498,7 +611,7 @@ export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
     try {
       const res = await deletePaymentApi(paymentToDelete);
       const payload = res?.data;
-      if (payload?.success || res.status === 200 || res.status === 204) {
+  if (((payload as any)?.success) || res.status === 200 || res.status === 204) {
         setPayments(prev => prev.filter(p => (p._id || p.id) !== paymentToDelete));
         toast.success("Payment deleted");
       } else {
@@ -718,12 +831,19 @@ const isTaxableItem = (item: any): boolean => {
                                   patientId
                                 }));
 
-                                if (invoice.subtotal !== undefined && invoice.subtotal !== null) {
-                                  setSubtotalAmount(String(invoice.subtotal));
-                                  setNewPayment(prev => ({ ...prev, amount: String(invoice.subtotal) }));
-                                } else if (invoice.amount !== undefined && invoice.amount !== null) {
-                                  setSubtotalAmount(String(invoice.amount));
-                                  setNewPayment(prev => ({ ...prev, amount: String(invoice.amount) }));
+                                // compute subtotal: prefer explicit subtotal/amount, otherwise derive from items
+                                const computeSubtotal = (inv:any) => {
+                                  if (inv == null) return 0;
+                                  if (inv.subtotal !== undefined && inv.subtotal !== null) return Number(inv.subtotal);
+                                  if (inv.amount !== undefined && inv.amount !== null) return Number(inv.amount);
+                                  if (Array.isArray(inv.items) && inv.items.length > 0) return inv.items.reduce((s:number,it:any) => s + Number(it.totalPrice ?? it.amount ?? it.price ?? 0), 0);
+                                  if (Array.isArray(inv.lines) && inv.lines.length > 0) return inv.lines.reduce((s:number,it:any) => s + Number(it.totalPrice ?? it.amount ?? it.price ?? 0), 0);
+                                  return 0;
+                                };
+                                const subtotalVal = computeSubtotal(invoice);
+                                if (subtotalVal && subtotalVal > 0) {
+                                  setSubtotalAmount(String(subtotalVal));
+                                  setNewPayment(prev => ({ ...prev, amount: String(subtotalVal) }));
                                 } else {
                                   setSubtotalAmount("");
                                   setNewPayment(prev => ({ ...prev, amount: "" }));
@@ -743,8 +863,11 @@ const isTaxableItem = (item: any): boolean => {
                               <Check className={`mr-2 h-4 w-4 ${(selectedInvoiceNumber === (invoice.number || invoice.invoiceNumber || invoice._id || "")) ? "opacity-100" : "opacity-0"}`} />
                               <div>
                                 <div className="font-medium">{invoice.number || invoice.invoiceNumber || invoice._id}</div>
-                                <div className="text-sm text-gray-500">
-                                  {invoice.patientName || invoice.patient} ({invoice.patientId || ''}) - ₱{(typeof invoice.amount === 'number') ? invoice.amount.toLocaleString() : (invoice.amount ? String(invoice.amount) : '0.00')}
+                              <div className="text-sm text-gray-500">
+                                  {invoice.patientName || (invoice.patient && (typeof invoice.patient === 'string' ? invoice.patient : invoice.patient.name))} ({invoice.patientId || ''}) - ₱{(() => {
+                                    const sub = (invoice.subtotal !== undefined && invoice.subtotal !== null) ? Number(invoice.subtotal) : (invoice.amount !== undefined && invoice.amount !== null ? Number(invoice.amount) : (Array.isArray(invoice.items) ? invoice.items.reduce((s:number,it:any)=> s + Number(it.totalPrice ?? it.amount ?? it.price ?? 0), 0) : 0));
+                                    return sub.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                                  })()}
                                 </div>
                               </div>
                             </CommandItem>
@@ -879,196 +1002,209 @@ const isTaxableItem = (item: any): boolean => {
       {/* Confirm AlertDialog */}
       <AlertDialog open={showConfirmDialog} onOpenChange={setShowConfirmDialog}>
         <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Confirm Payment</AlertDialogTitle>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => setShowConfirmDialog(false)}>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleProcessPayment}>{isProcessing ? "Processing..." : "Confirm"}</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Confirm Payment Processing</AlertDialogTitle>
+            </AlertDialogHeader>
+            <div className="px-6 pb-4 text-sm">
+              <p className="text-gray-600 mb-4">Please review the payment details before confirming:</p>
+
+              <div className="grid grid-cols-2 gap-2 mb-3">
+                <div className="text-gray-600">Invoice Number:</div>
+                <div className="text-right font-medium">{newPayment.invoiceNumber || selectedInvoiceNumber || processedPayment?.invoiceNumber || ''}</div>
+
+                <div className="text-gray-600">Patient:</div>
+                <div className="text-right font-medium">{newPayment.patientName || processedPayment?.patientName || ''}</div>
+
+                <div className="text-gray-600">Payment Method:</div>
+                <div className="text-right font-medium capitalize">{selectedPaymentMethod || newPayment.method || 'cash'}</div>
+              </div>
+
+              <hr className="my-3" />
+
+              <div className="grid grid-cols-2 items-center">
+                <div className="text-gray-600">Subtotal:</div>
+                <div className="text-right font-medium">₱{Number(processedPayment?.subtotal || subtotalAmount || newPayment.amount || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</div>
+              </div>
+
+              <div className="mt-4 flex items-end justify-between">
+                <div>
+                  <div className="text-sm text-gray-600">Amount:</div>
+                </div>
+                <div className="text-2xl font-bold text-[#358E83]">₱{Number(newPayment.amount || processedPayment?.amount || subtotalAmount || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</div>
+              </div>
+
+              {selectedPaymentMethod === 'cash' && (
+                <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                  <div className="text-gray-600">Cash Received:</div>
+                  <div className="text-right">₱{Number(cashReceived || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</div>
+
+                  <div className="text-gray-600">Change:</div>
+                  <div className="text-right text-green-600 font-medium">₱{(() => {
+                    const paid = Number(newPayment.amount || processedPayment?.amount || subtotalAmount || 0);
+                    const rec = Number(cashReceived || 0);
+                    const change = Math.max(0, rec - paid);
+                    return change.toLocaleString('en-PH', { minimumFractionDigits: 2 });
+                  })()}</div>
+                </div>
+              )}
+            </div>
+            <AlertDialogFooter>
+              <AlertDialogCancel onClick={() => setShowConfirmDialog(false)}>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={handleProcessPayment}>{isProcessing ? "Processing..." : "Confirm & Process"}</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
       </AlertDialog>
 
-      {/* Receipt Dialog */}
+      {/* Receipt Dialog (uses same Dialog layout as InvoiceGeneration) */}
       <Dialog open={showReceiptDialog} onOpenChange={setShowReceiptDialog}>
-        <DialogContent className="max-w-full w-[96vw] max-h-[96vh] overflow-y-auto p-6">
-          <DialogHeader><DialogTitle>Payment Receipt</DialogTitle></DialogHeader>
-          <div id="payment-receipt-print" className="p-4 text-sm bg-white text-black">
+        <DialogContent className="max-w-full w-[min(1100px,80vw)] max-h-[90vh] overflow-y-auto receipt-dialog p-6 mx-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center justify-between">
+              <span>Invoice Receipt</span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handlePrintReceipt}
+                className="ml-4"
+              >
+                <Printer className="mr-2 h-4 w-4" />
+                Print Receipt
+              </Button>
+            </DialogTitle>
+            <div className="text-sm text-gray-500">Receipt generated successfully. Review the details below.</div>
+          </DialogHeader>
+
+          <div id="payment-receipt-print" className="space-y-6 print:p-8">
             {processedPayment ? (
               <>
-                {/* Hospital Header */}
-                <div className="text-center border-b-2 border-black pb-4 mb-4">
-                  <h1 className="font-bold text-2xl mb-1">MEDICARE HOSPITAL</h1>
-                  <p className="text-sm">123 Health Avenue, City, Country</p>
-                  <p className="text-sm">Tel: (02) 1234-5678 | Email: billing@medicarehospital.ph</p>
-                  <p className="text-sm mt-2 font-semibold">OFFICIAL RECEIPT</p>
+                <div className="text-center border-b pb-4">
+                  <h2 className="text-2xl font-bold text-[#358E83]">MediCare Hospital</h2>
+                  <p className="text-sm text-gray-600">123 Health Street, Medical District, Philippines</p>
+                  <p className="text-sm text-gray-600">Tel: (02) 1234-5678 | Email: billing@medicare.ph</p>
                 </div>
 
-                {/* Patient and Account Information Header - Two Columns */}
-                <div className="grid grid-cols-2 gap-x-12 text-sm">
-                  {/* Left Column - Patient Info */}
-                  <div className="space-y-0.5">
-                    <div className="flex">
-                      <span className="font-semibold w-40">Patient:</span>
-                      <span className="uppercase font-semibold">{processedPayment.patientName}</span>
-                    </div>
-                    <div className="flex">
-                      <span className="font-semibold w-40">Age:</span>
-                      <span>{getPatientDemographics(processedPayment.patientId).age}</span>
-                      <span className="ml-8 font-semibold">Sex:</span>
-                      <span className="ml-2">{getPatientDemographics(processedPayment.patientId).sex}</span>
-                    </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-sm text-gray-600">Invoice Number:</p>
+                    <p className="font-semibold">{processedPayment.invoiceNumber}</p>
                   </div>
-
-                  {/* Right Column - Account Info */}
-                  <div className="space-y-0.5">
-                    <div className="flex">
-                      <span className="font-semibold w-32">ACCOUNT NO.</span>
-                      <span>{processedPayment.invoiceNumber}</span>
-                    </div>
-                    <div className="flex">
-                      <span className="font-semibold w-32">Date:</span>
-                      <span>{new Date(processedPayment.date).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</span>
-                    </div>
-                    <div className="flex">
-                      <span className="font-semibold w-32">Time:</span>
-                      <span>{processedPayment.time || ''}</span>
-                    </div>
-                    <div className="flex">
-                      <span className="font-semibold w-32">Date Today:</span>
-                      <span>{new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</span>
-                    </div>
+                  <div>
+                    <p className="text-sm text-gray-600">Date Issued:</p>
+                    <p className="font-semibold">{formatIssuedDate(processedPayment)}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600">Patient Name:</p>
+                    <p className="font-semibold">{processedPayment.patientName}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600">Patient ID:</p>
+                    <p className="font-semibold">{processedPayment.patientId || processedPayment.id || 'N/A'}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600">Age / Sex:</p>
+                    <p className="font-semibold">{getDemographicsForPayment(processedPayment).age} / {getDemographicsForPayment(processedPayment).sex}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600">Payment Status:</p>
+                    <Badge className={getStatusColor(processedPayment.status)}>{(processedPayment.status || 'paid').toUpperCase()}</Badge>
                   </div>
                 </div>
 
-                {/* Hospital Charges Section */}
-                <div className="mt-6">
-                  <h3 className="text-center font-bold text-base mb-3">HOSPITAL CHARGES</h3>
-                  <table className="w-full text-sm border-collapse">
-                    <thead>
-                      <tr className="border-b-2 border-black">
-                        <th className="px-2 py-1.5 text-left font-semibold">PARTICULARS</th>
-                        <th className="px-2 py-1.5 text-right font-semibold w-24">TOTAL</th>
-                        <th className="px-2 py-1.5 text-right font-semibold w-24">PHIC</th>
-                        <th className="px-2 py-1.5 text-right font-semibold w-28">MSS DISCOUNT</th>
-                        <th className="px-2 py-1.5 text-right font-semibold w-24">CASH</th>
-                        <th className="px-2 py-1.5 text-right font-semibold w-24">BALANCE</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(() => {
-                        const hospitalItems = processedPayment.items && processedPayment.items.length > 0
-                          ? processedPayment.items.filter(item => item.category !== 'Professional Fees')
-                          : [];
-                        const hospitalTotal = hospitalItems.reduce((sum, item) => sum + (item.totalPrice || 0), 0);
-                        const hospitalPhic = 0;
-                        const hospitalMssDiscount = processedPayment.discount ? (processedPayment.discount * (hospitalTotal / (processedPayment.subtotal || processedPayment.amount || 1))) : 0;
-                        const hospitalCash = 0;
-                        const hospitalBalance = hospitalTotal - hospitalPhic - hospitalMssDiscount - hospitalCash;
-
-                        if (hospitalItems.length > 0) {
-                          return hospitalItems.map((item, index) => {
-                            const itemAmount = item.totalPrice || 0;
-                            const phic = 0;
-                            const mssDiscount = processedPayment.discount ? (processedPayment.discount * (itemAmount / (processedPayment.subtotal || processedPayment.amount || 1))) : 0;
-                            const cash = 0;
-                            const balance = itemAmount - phic - mssDiscount - cash;
-                            return (
-                              <tr key={index} className="border-b border-gray-300">
-                                <td className="px-2 py-1.5">{item.description}</td>
-                                <td className="px-2 py-1.5 text-right">{itemAmount.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                                <td className="px-2 py-1.5 text-right">{phic.toFixed(2)}</td>
-                                <td className="px-2 py-1.5 text-right">{mssDiscount.toFixed(2)}</td>
-                                <td className="px-2 py-1.5 text-right">{cash.toFixed(2)}</td>
-                                <td className="px-2 py-1.5 text-right">{balance.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                              </tr>
-                            );
-                          });
-                        }
-
-                        // fallback static rows if no items
-                        return (
-                          <>
-                            <tr className="border-b border-gray-300">
-                              <td className="px-2 py-1.5">Drugs and medicine</td>
-                              <td className="px-2 py-1.5 text-right">3,582.00</td>
-                              <td className="px-2 py-1.5 text-right">0.00</td>
-                              <td className="px-2 py-1.5 text-right">0.00</td>
-                              <td className="px-2 py-1.5 text-right">0.00</td>
-                              <td className="px-2 py-1.5 text-right">3,582.00</td>
-                            </tr>
-                            <tr className="border-b border-gray-300">
-                              <td className="px-2 py-1.5">Misc. Med. Supplies</td>
-                              <td className="px-2 py-1.5 text-right">2,271.00</td>
-                              <td className="px-2 py-1.5 text-right">0.00</td>
-                              <td className="px-2 py-1.5 text-right">0.00</td>
-                              <td className="px-2 py-1.5 text-right">0.00</td>
-                              <td className="px-2 py-1.5 text-right">2,271.00</td>
-                            </tr>
-                            <tr className="border-b border-gray-300">
-                              <td className="px-2 py-1.5">Clinical Laboratory</td>
-                              <td className="px-2 py-1.5 text-right">5,712.00</td>
-                              <td className="px-2 py-1.5 text-right">0.00</td>
-                              <td className="px-2 py-1.5 text-right">0.00</td>
-                              <td className="px-2 py-1.5 text-right">0.00</td>
-                              <td className="px-2 py-1.5 text-right">5,712.00</td>
-                            </tr>
-                            <tr className="border-b border-gray-300">
-                              <td className="px-2 py-1.5">Room and Board</td>
-                              <td className="px-2 py-1.5 text-right">1,705.00</td>
-                              <td className="px-2 py-1.5 text-right">0.00</td>
-                              <td className="px-2 py-1.5 text-right">0.00</td>
-                              <td className="px-2 py-1.5 text-right">0.00</td>
-                              <td className="px-2 py-1.5 text-right">1,705.00</td>
-                            </tr>
-                            <tr className="border-b border-gray-300">
-                              <td className="px-2 py-1.5">CT Scan</td>
-                              <td className="px-2 py-1.5 text-right">5,000.00</td>
-                              <td className="px-2 py-1.5 text-right">0.00</td>
-                              <td className="px-2 py-1.5 text-right">0.00</td>
-                              <td className="px-2 py-1.5 text-right">0.00</td>
-                              <td className="px-2 py-1.5 text-right">5,000.00</td>
-                            </tr>
-                            <tr className="border-b border-gray-300">
-                              <td className="px-2 py-1.5">Ward Procedures</td>
-                              <td className="px-2 py-1.5 text-right">1,774.00</td>
-                              <td className="px-2 py-1.5 text-right">0.00</td>
-                              <td className="px-2 py-1.5 text-right">0.00</td>
-                              <td className="px-2 py-1.5 text-right">0.00</td>
-                              <td className="px-2 py-1.5 text-right">1,774.00</td>
-                            </tr>
-                            <tr className="border-t-2 border-black font-semibold">
-                              <td className="px-2 py-1.5">TOTAL</td>
-                              <td className="px-2 py-1.5 text-right">20,044.00</td>
-                              <td className="px-2 py-1.5 text-right">0.00</td>
-                              <td className="px-2 py-1.5 text-right">0.00</td>
-                              <td className="px-2 py-1.5 text-right">0.00</td>
-                              <td className="px-2 py-1.5 text-right">20,044.00</td>
-                            </tr>
-                          </>
-                        );
-                      })()}
-                    </tbody>
-                  </table>
+                <div>
+                  <h3 className="font-semibold mb-2">Services Rendered</h3>
+                  <div className="border rounded-lg overflow-hidden">
+                    <table className="w-full">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="px-4 py-2 text-left">Description</th>
+                          <th className="px-4 py-2 text-center">Qty</th>
+                          <th className="px-4 py-2 text-right">Rate</th>
+                          <th className="px-4 py-2 text-right">Amount</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {Array.isArray(processedPayment.items) && processedPayment.items.length > 0 ? processedPayment.items.map((item:any, idx:number) => (
+                          <tr key={item.id || idx} className="border-t">
+                            <td className="px-4 py-2">
+                              <div>{item.description || item.name || item.medicationName || 'Item'}</div>
+                              <div className="text-xs text-gray-500">{item.category || item.group || ''}</div>
+                            </td>
+                            <td className="px-4 py-2 text-center">{item.quantity ?? item.qty ?? 1}</td>
+                            <td className="px-4 py-2 text-right">₱{Number(item.rate ?? item.unitPrice ?? item.price ?? item.totalPrice ?? 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</td>
+                            <td className="px-4 py-2 text-right">₱{Number(item.amount ?? item.totalPrice ?? (item.quantity ?? 1) * (item.rate ?? item.unitPrice ?? item.price ?? 0)).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</td>
+                          </tr>
+                        )) : (
+                          <tr>
+                            <td className="px-4 py-2">No items</td>
+                            <td className="px-4 py-2" />
+                            <td className="px-4 py-2" />
+                            <td className="px-4 py-2 text-right">₱0.00</td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
 
-                {/* Grand Total / Summary */}
-                <div className="mt-6 text-right">
-                  <p className="font-semibold">Subtotal: ₱{Number(processedPayment.subtotal || processedPayment.amount || 0).toLocaleString('en-PH', { minimumFractionDigits:2 })}</p>
-                  <p>Discount: ₱{Number(processedPayment.discount || 0).toLocaleString('en-PH', { minimumFractionDigits:2 })}</p>
-                  <p className="font-bold text-lg">Total Paid: ₱{Number(processedPayment.amount || 0).toLocaleString('en-PH', { minimumFractionDigits:2 })}</p>
+                <div className="border-t pt-4">
+                  <div className="flex justify-end">
+                    <div className="w-96 space-y-2">
+                      <div className="flex justify-between">
+                        <span>Subtotal:</span>
+                        <span>₱{Number(processedPayment.subtotal || processedPayment.amount || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</span>
+                      </div>
+                      {processedPayment.discount && Number(processedPayment.discount) > 0 && (
+                        <div className="flex justify-between text-green-600">
+                          <span>Discount:</span>
+                          <span>-₱{Number(processedPayment.discount).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</span>
+                        </div>
+                      )}
+                      {processedPayment.tax && Number(processedPayment.tax) > 0 && (
+                        <div className="flex justify-between text-blue-600 text-sm">
+                          <span>VAT on Medicines (12%):</span>
+                          <span>₱{Number(processedPayment.tax).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</span>
+                        </div>
+                      )}
+                      <div className="border-t my-2"></div>
+                      <div className="flex justify-between font-bold text-lg">
+                        <span>Total Amount Paid:</span>
+                        <span>₱{Number(processedPayment.amount || processedPayment.subtotal || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="border-t pt-4 space-y-3">
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <p className="text-gray-600">Processed By:</p>
+                      <p className="font-semibold">{processedPayment.createdBy || userSession?.name || 'System'}</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-600">Processed At:</p>
+                      <p className="font-semibold">{new Date(processedPayment.date || processedPayment.createdAt || Date.now()).toLocaleString('en-PH')}</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="text-center text-sm text-gray-600 border-t pt-4">
+                  <p>Thank you for choosing MediCare Hospital!</p>
+                  <p className="mt-2">For inquiries, please contact our billing department.</p>
+                  <p className="mt-4">Generated on {new Date().toLocaleString('en-PH', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
                 </div>
               </>
             ) : (
               <p>No receipt available.</p>
             )}
           </div>
-<DialogFooter>
-  <Button variant="outline" onClick={() => setShowReceiptDialog(false)}>Close</Button>
-  <Button className="bg-[#E94D61] text-white" onClick={handlePrintReceipt}>
-    <Printer className="mr-2" size={14} /> Print Receipt
-  </Button>
-</DialogFooter>
+
+          <div className="flex justify-end space-x-3 print:hidden">
+            <Button variant="outline" onClick={() => setShowReceiptDialog(false)}>Close</Button>
+            <Button className="bg-[#E94D61] hover:bg-[#E94D61]/90 text-white" onClick={handlePrintReceipt}>
+              <Printer className="mr-2 h-4 w-4" />
+              Print
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
 

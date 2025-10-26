@@ -47,9 +47,9 @@ interface PatientsManagementProps {
 }
 
 export function PatientsManagement({ onNavigateToView, userSession }: PatientsManagementProps) {
-  const [patients, setPatients] = useState([]);
+  const [patients, setPatients] = useState<any[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedPatient, setSelectedPatient] = useState(null);
+  const [selectedPatient, setSelectedPatient] = useState<any | null>(null);
   const [showPatientDialog, setShowPatientDialog] = useState(false);
   const [showAddPatientDialog, setShowAddPatientDialog] = useState(false);
   const [showAddServiceDialog, setShowAddServiceDialog] = useState(false);
@@ -187,6 +187,13 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
         (patientService as any).setPatients([created, ...(patientService as any).getAllPatients?.() || []]);
       }
 
+      // Notify other parts of the app (e.g., cashier/invoice) that patients list changed
+      try {
+        window.dispatchEvent(new CustomEvent('patients-updated', { detail: { action: 'create', patient: created } }));
+      } catch (e) {
+        console.warn('Could not dispatch patients-updated event', e);
+      }
+
       return created;
     } catch (e) {
       console.error("createPatient error", e);
@@ -210,6 +217,12 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
       if (typeof (patientService as any).setPatients === "function") {
         (patientService as any).setPatients((patientService as any).getAllPatients?.() || []);
       }
+      // Notify listeners about patient update
+      try {
+        window.dispatchEvent(new CustomEvent('patients-updated', { detail: { action: 'update', patient: updated } }));
+      } catch (e) {
+        console.warn('Could not dispatch patients-updated event', e);
+      }
       return updated;
     } catch (e) {
       console.error("updatePatient error", e);
@@ -227,6 +240,11 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
       if (!res.ok || !body.success) throw new Error(body?.message || "Delete failed");
       setPatients((prev: any[]) => prev.filter(p => p.id !== id && p._id !== id && p.patientId !== id));
       toast.success("Patient deleted");
+      try {
+        window.dispatchEvent(new CustomEvent('patients-updated', { detail: { action: 'delete', id } }));
+      } catch (e) {
+        console.warn('Could not dispatch patients-updated event', e);
+      }
     } catch (e) {
       console.error("deletePatient error", e);
       toast.error("Failed to delete patient");
@@ -256,6 +274,11 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
       return;
     }
 
+    if (!selectedPatient) {
+      toast.error('No patient selected');
+      return;
+    }
+
     if (typeof ps.addService === "function") {
       ps.addService(selectedPatient.id, {
        description: serviceForm.description,
@@ -282,6 +305,11 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
   const handleAddMedicine = () => {
     if (!medicineForm.description || !medicineForm.quantity || !medicineForm.unitPrice) {
       toast.error("Please fill in all required fields");
+      return;
+    }
+
+    if (!selectedPatient) {
+      toast.error('No patient selected');
       return;
     }
 
@@ -351,7 +379,7 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
     return pid.includes(term) || name.includes(term) || contact.includes(term);
   });
 
-  const getPatientCharges = (patient) => {
+  const getPatientCharges = (patient: any) => {
     const pid = patient?.id || patient?._id || patient?.patientId;
     if (typeof ps.getPatientTotalCharges === "function" && pid) {
       try {
@@ -361,6 +389,24 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
       }
     }
     return { total: 0, services: 0, medicines: 0, medicinesVAT: 0, subtotal: 0 };
+  };
+
+  // Local fallback age calculator (years) when patientService.calculateAge is not available
+  const calculateAgeLocal = (dob: string) => {
+    if (!dob) return "-";
+    try {
+      const birth = new Date(dob);
+      if (isNaN(birth.getTime())) return "-";
+      const today = new Date();
+      let age = today.getFullYear() - birth.getFullYear();
+      const m = today.getMonth() - birth.getMonth();
+      if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) {
+        age--;
+      }
+      return age >= 0 ? age : "-";
+    } catch (e) {
+      return "-";
+    }
   };
 
   return (
@@ -483,8 +529,8 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
               filteredPatients.map((patient, idx) => {
                 const pid = patient?.id || patient?._id || patient?.patientId || `p-${idx}`;
                 const charges = getPatientCharges(patient);
-                const age = (patient?.dateOfBirth && typeof ps.calculateAge === 'function')
-                  ? ps.calculateAge(patient.dateOfBirth)
+                const age = (patient?.dateOfBirth)
+                  ? (typeof ps.calculateAge === 'function' ? ps.calculateAge(patient.dateOfBirth) : calculateAgeLocal(patient.dateOfBirth))
                   : "-";
                 
                 return (
@@ -724,7 +770,7 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
 
       {/* Add Patient Dialog */}
       <Dialog open={showAddPatientDialog} onOpenChange={setShowAddPatientDialog}>
-        <DialogContent className="max-w-md p-6">
+    <DialogContent className="w-[95vw] max-w-4xl p-6">
           <DialogHeader>
             <DialogTitle className="text-2xl font-semibold">
               {editingPatientId ? "Edit Patient" : "Add New Patient"}
@@ -736,7 +782,7 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
             </DialogDescription>
           </DialogHeader>
 
-          <div className="grid grid-cols-1 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <Label htmlFor="name" className="text-sm font-medium">Name</Label>
               <Input
@@ -744,7 +790,7 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
                 value={patientForm.name}
                 onChange={(e) => setPatientForm({ ...patientForm, name: e.target.value })}
                 placeholder="Enter patient's full name"
-                className="mt-1"
+                className="mt-1 md:col-span-2"
               />
             </div>
 
@@ -764,7 +810,7 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
               <Select
                 id="sex"
                 value={patientForm.sex}
-                onValueChange={(value) => setPatientForm({ ...patientForm, sex: value })}
+                onValueChange={(value: string) => setPatientForm({ ...patientForm, sex: value })}
                 className="mt-1"
               >
                 <SelectTrigger>
@@ -789,7 +835,7 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
               />
             </div>
 
-            <div>
+            <div className="md:col-span-2">
               <Label htmlFor="address" className="text-sm font-medium">Address</Label>
               <Input
                 id="address"
@@ -800,7 +846,7 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
               />
             </div>
 
-            <div>
+            <div className="md:col-span-2">
               <Label htmlFor="email" className="text-sm font-medium">Email</Label>
               <Input
                 id="email"
@@ -817,7 +863,7 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
               <Select
                 id="bloodType"
                 value={patientForm.bloodType}
-                onValueChange={(value) => setPatientForm({ ...patientForm, bloodType: value })}
+                onValueChange={(value: string) => setPatientForm({ ...patientForm, bloodType: value })}
                 className="mt-1"
               >
                 <SelectTrigger>
@@ -858,7 +904,7 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
               />
             </div>
 
-            <div>
+            <div className="md:col-span-2">
               <Label htmlFor="emergencyContactPhone" className="text-sm font-medium">Emergency Contact Phone</Label>
               <Input
                 id="emergencyContactPhone"

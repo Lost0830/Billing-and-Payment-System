@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import dotenv from "dotenv";
 import cors from "cors";
 import User from "./models/users.js";
+import Patient from "./models/patient.js";
 import Billing from "./models/billing.js";
 import Payment from "./models/payment.js";
 
@@ -85,6 +86,61 @@ app.post("/api/seed", async (req, res) => {
   }
 });
 
+// Seed example patients (useful to restore demo data if DB was cleared)
+app.post("/api/seed-patients", async (req, res) => {
+  try {
+    const samplePatients = [
+      {
+        name: "Juan Santos",
+        dateOfBirth: "1988-05-12",
+        sex: "male",
+        contactNumber: "09179876543",
+        address: "123 Health Street, Manila",
+        email: "juan.santos@example.com",
+        bloodType: "O+",
+        services: [],
+        medicines: [],
+        createdBy: "John",
+        createdByRole: "admin"
+      },
+      {
+        name: "Anna Reyes",
+        dateOfBirth: "1992-09-03",
+        sex: "female",
+        contactNumber: "09171234567",
+        address: "456 Wellness Ave, Manila",
+        email: "anna.reyes@example.com",
+        bloodType: "A+",
+        services: [],
+        medicines: [],
+        createdBy: "John",
+        createdByRole: "admin"
+      },
+      {
+        name: "Maria Santos",
+        dateOfBirth: "1975-02-20",
+        sex: "female",
+        contactNumber: "09170001111",
+        address: "789 Care Blvd, Manila",
+        email: "maria.santos@example.com",
+        bloodType: "B+",
+        services: [],
+        medicines: [],
+        createdBy: "Admin",
+        createdByRole: "admin"
+      }
+    ];
+
+    // clear existing demo patients (only for demo environments)
+    await Patient.deleteMany({});
+    const inserted = await Patient.insertMany(samplePatients);
+    res.json({ success: true, message: 'Seeded patients', count: inserted.length, data: inserted });
+  } catch (err) {
+    console.error('Seed patients error', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // Simple login endpoint (plain password compare)
 app.post("/api/auth/login", async (req, res) => {
   try {
@@ -136,6 +192,18 @@ app.delete("/api/users/:id", async (req, res) => {
     res.json({ success: true, message: "User deleted", data: { id: req.params.id } });
   } catch (err) {
     res.status(500).json({ success: false, message: "Server error deleting user", error: err.message });
+  }
+});
+
+// Update user
+app.patch("/api/users/:id", async (req, res) => {
+  try {
+    const updated = await User.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    if (!updated) return res.status(404).json({ success: false, message: "User not found" });
+    res.json({ success: true, message: "User updated", data: updated });
+  } catch (err) {
+    console.error('Update user error:', err);
+    res.status(500).json({ success: false, message: 'Server error updating user', error: err.message });
   }
 });
 

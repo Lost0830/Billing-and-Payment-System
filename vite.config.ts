@@ -55,5 +55,14 @@
     server: {
       port: 3000,
       open: true,
+      // Proxy API requests to the backend server to avoid the dev server returning index.html
+      proxy: {
+        '/api': {
+          target: 'http://localhost:5000',
+          changeOrigin: true,
+          secure: false,
+          // rewrite not needed here because backend expects /api/* as-is
+        },
+      },
     },
   });

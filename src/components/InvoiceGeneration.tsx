@@ -17,6 +17,7 @@ import { toast } from "sonner@2.0.3";
 import axios from "axios";
 import { useEffect, useState } from "react";
 import { fetchPatients } from "../services/api.js";
+import { pharmacyService } from "../services/pharmacyIntegration";
 import { DiscountService, DiscountOption } from "../services/discountService";
 
 interface InvoiceGenerationProps {
@@ -112,8 +113,25 @@ export function InvoiceGeneration({ onNavigateToView }: InvoiceGenerationProps) 
   // Sample invoices with more comprehensive data
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [patients, setPatients] = useState<any[]>([]);
+  const [pharmacyTransactions, setPharmacyTransactions] = useState<any[]>([]);
   const [dynamicDiscounts, setDynamicDiscounts] = useState<DiscountOption[]>([]);
   const API_BASE = "http://localhost:5000/api";
+
+  // Helper to compute age (years) from ISO date string
+  const calculateAge = (dob?: string | null) => {
+    if (!dob) return "-";
+    try {
+      const b = new Date(dob);
+      if (isNaN(b.getTime())) return "-";
+      const today = new Date();
+      let age = today.getFullYear() - b.getFullYear();
+      const m = today.getMonth() - b.getMonth();
+      if (m < 0 || (m === 0 && today.getDate() < b.getDate())) age--;
+      return age >= 0 ? age : "-";
+    } catch (e) {
+      return "-";
+    }
+  };
 
   useEffect(() => {
     // load invoices and patients in parallel
@@ -128,6 +146,15 @@ export function InvoiceGeneration({ onNavigateToView }: InvoiceGenerationProps) 
     };
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Listen for patient updates (created/updated by admin) and reload patients
+  useEffect(() => {
+    const handler = () => {
+      fetchPatients().then((p) => setPatients(Array.isArray(p) ? p : [])).catch((e) => console.error('Failed to refresh patients', e));
+    };
+    window.addEventListener('patients-updated', handler as EventListener);
+    return () => window.removeEventListener('patients-updated', handler as EventListener);
   }, []);
 
   // Load active discounts and listen for updates from discount management
@@ -156,8 +183,8 @@ export function InvoiceGeneration({ onNavigateToView }: InvoiceGenerationProps) 
         axios.get(`${API_BASE}/payments`)
       ]);
 
-      const invPayload = invRes?.data;
-      const payPayload = payRes?.data;
+  const invPayload: any = invRes?.data;
+  const payPayload: any = payRes?.data;
 
       const paymentsArray: any[] = Array.isArray(payPayload)
         ? payPayload
@@ -226,6 +253,7 @@ export function InvoiceGeneration({ onNavigateToView }: InvoiceGenerationProps) 
   const [newInvoice, setNewInvoice] = useState({
     patientName: "",
     patientId: "",
+    dueDate: new Date().toISOString(),
     notes: ""
   });
   
@@ -378,6 +406,7 @@ const handleGenerateInvoice = async () => {
     const total = calculateTotal();
 
     const invoice: Invoice = {
+      id: Date.now().toString(),
       number: `INV-${Date.now()}`,
       patientName: newInvoice.patientName,
       patientId: newInvoice.patientId,
@@ -394,21 +423,26 @@ const handleGenerateInvoice = async () => {
       notes: newInvoice.notes,
     };
 
-    const res = await axios.post(`${API_BASE}/invoices`, invoice);
+    const res: any = await axios.post(`${API_BASE}/invoices`, invoice);
 
     if (res.data.success) {
       toast.success("Invoice saved to database!");
-setInvoices((prev) => [
-  {
-    ...res.data.data,
-    id: res.data.data._id || Date.now().toString(),
-    number: res.data.data.number || res.data.data.invoiceNumber || "N/A",
-  },
-  ...prev,
-]);
+      const saved = (res.data?.data || invoice) as any;
+      // ensure id and number exist
+      saved.id = saved._id || saved.id || invoice.id;
+      saved.number = saved.number || saved.invoiceNumber || invoice.number;
+
+      // attach patient details from loaded patients if available (helps receipt display)
+      const patientObj = patients.find((p:any) => {
+        const pid = p.id || p._id || p.patientId;
+        return pid && String(pid) === String(saved.patientId);
+      });
+      if (patientObj) saved.patient = patientObj;
+
+      setInvoices((prev) => [saved as Invoice, ...prev]);
 
       setShowReceiptDialog(true);
-      setGeneratedInvoice(res.data.data);
+      setGeneratedInvoice(saved as Invoice & { patient?: any });
       setShowCreateForm(false);
     } else {
       toast.error("Failed to save invoice");
@@ -423,18 +457,27 @@ setInvoices((prev) => [
 
 
   const handlePrintReceipt = () => {
-    const printWindow = window.open('', '_blank');
+  const printWindow = window.open('', '_blank');
     if (!printWindow) return;
     
     const receiptContent = document.getElementById('invoice-receipt-print');
     if (!receiptContent) return;
     
+    // compute patient age/sex for the print header
+    const patientForPrint = (generatedInvoice as any)?.patient || patients.find((p:any) => {
+      const pid = p.id || p._id || p.patientId;
+      return pid && String(pid) === String(generatedInvoice?.patientId);
+    });
+    const printAge = patientForPrint ? calculateAge(patientForPrint.dateOfBirth) : (generatedInvoice?.date ? calculateAge(generatedInvoice.date) : "-");
+    const printSex = (patientForPrint && (patientForPrint.sex || 'Unknown')) || (generatedInvoice as any)?.sex || 'Unknown';
+
     printWindow.document.write(`
       <!DOCTYPE html>
       <html>
         <head>
           <title>Invoice Receipt - ${generatedInvoice?.number}</title>
           <style>
+            @page { size: A4 landscape; }
             * {
               margin: 0;
               padding: 0;
@@ -442,8 +485,8 @@ setInvoices((prev) => [
             }
             body {
               font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-              padding: 2rem;
-              max-width: 800px;
+              padding: 1rem 2rem;
+              max-width: 1200px;
               margin: 0 auto;
               color: #000;
             }
@@ -536,6 +579,8 @@ setInvoices((prev) => [
             .w-96 {
               width: 24rem;
             }
+            /* make tables wider to suit landscape */
+            table { width: 100%; }
             .flex {
               display: flex;
             }
@@ -629,9 +674,9 @@ const confirmDeleteInvoice = async () => {
   if (!invoiceToDelete) return;
 
   try {
-    const res = await axios.delete(`${API_BASE}/invoices/${invoiceToDelete}`);
-    if (res.data.success) {
-      setInvoices((prev) => prev.filter((inv) => inv._id !== invoiceToDelete));
+    const res: any = await axios.delete(`${API_BASE}/invoices/${invoiceToDelete}`);
+    if (res?.data?.success) {
+      setInvoices((prev) => prev.filter((inv) => inv.id !== invoiceToDelete));
       toast.success("Invoice deleted successfully!");
     } else {
       toast.error("Failed to delete invoice");
@@ -704,82 +749,127 @@ const confirmDeleteInvoice = async () => {
                       <CommandList>
                         <CommandEmpty>No patient found.</CommandEmpty>
                         <CommandGroup>
-                          {PREDEFINED_PATIENTS.filter(p => {
-                            const q = (patientSearch || "").toLowerCase();
-                            return q === "" || p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q);
-                          }).map((patient) => {
-                            const hasEmrData = MockEmrService.hasUnbilledServices(patient.id);
-                            const emrData = MockEmrService.getPatientEmrData(patient.id);
-                            return (
-                              <CommandItem
-                                key={patient.id}
-                                value={patient.fullDisplay}
-                                onSelect={() => {
-                                setSelectedPatientId(patient.id);
-                                setNewInvoice({
-                                  ...newInvoice, 
-                                  patientName: patient.name,
-                                  patientId: patient.id
-                                });
-                                
-                                // Auto-populate services from EMR
-                                const emrServices = MockEmrService.getPatientServices(patient.id);
-                                if (emrServices.length > 0) {
-                                  const populatedItems: InvoiceItem[] = emrServices.map((service, index) => {
-                                    const price = PriceListService.getPrice(service.service, service.category);
-                                    return {
-                                      id: `emr-${service.serviceId}-${Date.now()}-${index}`,
-                                      description: service.service,
-                                      quantity: service.quantity,
-                                      rate: price,
-                                      amount: price * service.quantity,
-                                      category: service.category
-                                    };
-                                  });
-                                  setInvoiceItems(populatedItems);
-                                  toast.success(`Patient ${patient.name} selected - ${emrServices.length} services loaded from EMR`);
-                                } else {
-                                  setInvoiceItems([]);
-                                  toast.success(`Patient ${patient.name} selected - no pending services in EMR`);
-                                }
-                                
-                                setOpenPatientCombobox(false);
-                                setPatientSearch("");
-                              }}
-                            >
-                              <Check
-                                className={`mr-2 h-4 w-4 ${
-                                  selectedPatientId === patient.id ? "opacity-100" : "opacity-0"
-                                }`}
-                              />
-                              <div className="flex-1">
-                                <div>{patient.fullDisplay}</div>
-                                {hasEmrData && emrData && (
-                                  <div className="text-xs text-green-600 flex items-center mt-1">
-                                    <span className="inline-block w-2 h-2 bg-green-500 rounded-full mr-1"></span>
-                                    {emrData.services.length} services in EMR ({emrData.status})
+                          {patients.filter((p:any) => {
+                                const q = (patientSearch || "").toLowerCase();
+                                const pid = (p.id || p._id || p.patientId || "").toString().toLowerCase();
+                                const name = (p.name || "").toLowerCase();
+                                return q === "" || name.includes(q) || pid.includes(q);
+                              }).map((patient:any) => {
+                                const pid = patient.id || patient._id || patient.patientId;
+                                const hasEmrData = MockEmrService.hasUnbilledServices(pid);
+                                const emrData = MockEmrService.getPatientEmrData(pid);
+                                const display = `${patient.name} (${pid})`;
+                                return (
+                                  <CommandItem
+                                    key={pid}
+                                    value={display}
+                                    onSelect={async () => {
+                                    const selId = pid;
+                                    setSelectedPatientId(selId);
+                                    setNewInvoice({
+                                      ...newInvoice, 
+                                      patientName: patient.name,
+                                      patientId: selId
+                                    });
+
+                                    // Auto-populate services from EMR
+                                    const emrServices = MockEmrService.getPatientServices(selId);
+                                    if (emrServices.length > 0) {
+                                      const populatedItems: InvoiceItem[] = emrServices.map((service, index) => {
+                                        const price = PriceListService.getPrice(service.service, service.category);
+                                        return {
+                                          id: `emr-${service.serviceId}-${Date.now()}-${index}`,
+                                          description: service.service,
+                                          quantity: service.quantity,
+                                          rate: price,
+                                          amount: price * service.quantity,
+                                          category: service.category
+                                        };
+                                      });
+                                      setInvoiceItems(populatedItems);
+                                      toast.success(`Patient ${patient.name} selected - ${emrServices.length} services loaded from EMR`);
+                                    } else {
+                                      setInvoiceItems([]);
+                                      toast.success(`Patient ${patient.name} selected - no pending services in EMR`);
+                                    }
+
+                                    // Fetch pharmacy transactions for selected patient and auto-load medicines
+                                    try {
+                                      const txns = await pharmacyService.getTransactions(selId);
+                                      if (Array.isArray(txns) && txns.length > 0) {
+                                        setPharmacyTransactions(txns);
+                                        // Flatten items across transactions
+                                        const meds = txns.flatMap(t => t.items || []);
+                                        if (meds.length > 0) {
+                                          const medicineItems: InvoiceItem[] = meds.map((m:any, idx:number) => ({
+                                            id: `pharm-${m.id || idx}-${Date.now()}`,
+                                            description: `${m.medicationName} ${m.strength ? `(${m.strength})` : ''}`,
+                                            quantity: m.quantity || 1,
+                                            rate: m.unitPrice || m.totalPrice || 0,
+                                            amount: m.totalPrice || ((m.unitPrice || 0) * (m.quantity || 1)),
+                                            category: 'Pharmacy'
+                                          }));
+                                          setInvoiceItems(prev => [...medicineItems, ...prev]);
+                                          toast.success(`Loaded ${medicineItems.length} medicine items from pharmacy`);
+                                        }
+                                      } else {
+                                        // No pharmacy data - insert demo dummy medicines for demo purposes
+                                        const dummy = [
+                                          {
+                                            id: `pharm-demo-${Date.now()}`,
+                                            description: `Sample Medicine - Demo`,
+                                            quantity: 1,
+                                            rate: 200,
+                                            amount: 200,
+                                            category: 'Pharmacy'
+                                          }
+                                        ];
+                                        setPharmacyTransactions([]);
+                                        setInvoiceItems(prev => [...dummy, ...prev]);
+                                        toast.info('No pharmacy records found — added demo medicine items for display');
+                                      }
+                                    } catch (err) {
+                                      console.error('Failed to fetch pharmacy transactions', err);
+                                    }
+
+                                    setOpenPatientCombobox(false);
+                                    setPatientSearch("");
+                                  }}
+                                >
+                                  <Check
+                                    className={`mr-2 h-4 w-4 ${
+                                      selectedPatientId === pid ? "opacity-100" : "opacity-0"
+                                    }`}
+                                  />
+                                  <div className="flex-1">
+                                    <div>{display}</div>
+                                    {hasEmrData && emrData && (
+                                      <div className="text-xs text-green-600 flex items-center mt-1">
+                                        <span className="inline-block w-2 h-2 bg-green-500 rounded-full mr-1"></span>
+                                        {emrData.services.length} services in EMR ({emrData.status})
+                                      </div>
+                                    )}
+                                    {!hasEmrData && (
+                                      <div className="text-xs text-gray-500 mt-1">
+                                        No pending services
+                                      </div>
+                                    )}
                                   </div>
-                                )}
-                                {!hasEmrData && (
-                                  <div className="text-xs text-gray-500 mt-1">
-                                    No pending services
-                                  </div>
-                                )}
-                              </div>
-                            </CommandItem>
-                            );
-                          })}
+                                </CommandItem>
+                                );
+                              })}
                         </CommandGroup>
                       </CommandList>
                     </Command>
                   </PopoverContent>
                 </Popover>
                 <p className="text-sm text-gray-500 mt-1">
-                  Type to search from {PREDEFINED_PATIENTS.length} patients
+                  Type to search from {patients.length} patients
                 </p>
                 
                 {/* EMR Status Display */}
                 {selectedPatientId && (
+                  <>
                   <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
                     <div className="flex items-center justify-between">
                       <div>
@@ -802,6 +892,46 @@ const confirmDeleteInvoice = async () => {
                       </Badge>
                     </div>
                   </div>
+                  
+                  {/* Pharmacy Integration Panel - sized like the patient dropdown */}
+                  <div className="mt-3 flex justify-center">
+                    <div className="w-screen max-w-[95vw] p-4 bg-green-50 border border-green-200 rounded-lg">
+                      <div className="flex items-start justify-between">
+                        <div>
+                          <h4 className="font-medium text-green-900">Pharmacy Integration</h4>
+                          <p className="text-sm text-green-700 mt-1">
+                            {pharmacyTransactions.length === 0 ? 'No pharmacy purchases found for this patient' : `${pharmacyTransactions.length} Transaction(s) found`}
+                          </p>
+                        </div>
+                        <Badge className="bg-white border text-green-800">{pharmacyTransactions.length} Transaction(s)</Badge>
+                      </div>
+
+                      {pharmacyTransactions.length > 0 && (
+                        <div className="mt-3 text-sm">
+                          {pharmacyTransactions.map((t:any) => (
+                            <div key={t.id} className="border rounded p-2 mb-2 bg-white">
+                              <div className="flex items-center justify-between">
+                                <div>
+                                  <div className="font-medium">{t.pharmacyName} • {t.transactionDate}</div>
+                                  <div className="text-xs text-gray-600">{t.notes}</div>
+                                </div>
+                                <div className="text-sm font-semibold">₱{t.totalAmount?.toLocaleString?.() || t.totalAmount}</div>
+                              </div>
+                              <div className="mt-2">
+                                <ul className="text-sm list-disc pl-5">
+                                  {(t.items||[]).map((it:any, idx:number) => (
+                                    <li key={idx}>{it.medicationName} {(it.strength||'')} x{it.quantity} — ₱{it.totalPrice}</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                    </div>
+                  </div>
+                  </>
                 )}
               </div>
 
@@ -857,7 +987,7 @@ const confirmDeleteInvoice = async () => {
                   <Label htmlFor="serviceCategory">Service Category</Label>
                   <Select
                     value={currentItem.category}
-                    onValueChange={(value) => setCurrentItem({ ...currentItem, category: value, description: "" })}
+                    onValueChange={(value: string) => setCurrentItem({ ...currentItem, category: value, description: "" })}
                   >
                     <SelectTrigger>
                       <SelectValue placeholder="Select category" />
@@ -876,7 +1006,7 @@ const confirmDeleteInvoice = async () => {
                   <Label htmlFor="service">Service Description</Label>
                   <Select
                     value={currentItem.description}
-                    onValueChange={(value) => {
+                    onValueChange={(value: string) => {
                       const price = PriceListService.getPrice(value, currentItem.category);
                       setCurrentItem({ 
                         ...currentItem, 
@@ -996,7 +1126,7 @@ const confirmDeleteInvoice = async () => {
                   <Label htmlFor="discount">Discount Type</Label>
                   <Select
                     value={selectedDiscount}
-                    onValueChange={(value) => {
+                    onValueChange={(value: string) => {
                       setSelectedDiscount(value);
                       setCustomDiscountAmount("");
                     }}
@@ -1005,17 +1135,39 @@ const confirmDeleteInvoice = async () => {
                       <SelectValue placeholder="Select discount type" />
                     </SelectTrigger>
                     <SelectContent>
-                      {DISCOUNT_OPTIONS.map((discount) => (
-                        <SelectItem key={discount.value} value={discount.value}>
-                          {discount.label}
-                        </SelectItem>
-                      ))}
-                      {dynamicDiscounts.map((discount) => (
-                        <SelectItem key={discount.id} value={discount.id}>
-                          {discount.name} {discount.type === 'percentage' ? `(${discount.value}%)` : `(₱${discount.value})`}
-                        </SelectItem>
-                      ))}
-                      <SelectItem value="custom">Custom Amount</SelectItem>
+                      {/*
+                        Merge dynamic (admin) discounts with legacy DISCOUNT_OPTIONS and
+                        deduplicate similar entries. Preference is given to dynamic discounts
+                        coming from DiscountService. Legacy options will be filtered out if
+                        a dynamic discount appears to represent the same policy (e.g. "Senior").
+                      */}
+                      {(() => {
+                        // Build a set of lower-cased dynamic names for quick matching
+                        const dynNames = new Set<string>(dynamicDiscounts.map(d => (d.name || d.code || '').toLowerCase()));
+
+                        // Helper to extract a base label for legacy options (e.g. "Senior Citizen" from "Senior Citizen (20%)")
+                        const legacyBase = (label: string) => label.split('(')[0].trim().toLowerCase();
+
+                        // Render dynamic discounts first (admin-managed)
+                        const dynamicItems = dynamicDiscounts.map((discount) => (
+                          <SelectItem key={discount.id} value={discount.id}>
+                            {discount.name} {discount.type === 'percentage' ? `(${discount.value}%)` : `(₱${discount.value})`}
+                          </SelectItem>
+                        ));
+
+                        // Render legacy options but filter out ones that appear duplicated by name
+                        const legacyItems = DISCOUNT_OPTIONS.filter(lo => {
+                          const base = legacyBase(lo.label);
+                          // If any dynamic discount name contains the legacy base label, consider it a duplicate
+                          return !dynamicDiscounts.some(d => (d.name || '').toLowerCase().includes(base));
+                        }).map((discount) => (
+                          <SelectItem key={`legacy-${discount.value}`} value={discount.value}>
+                            {discount.label}
+                          </SelectItem>
+                        ));
+
+                        return [...dynamicItems, ...legacyItems, <SelectItem key="custom" value="custom">Custom Amount</SelectItem>];
+                      })()}
                     </SelectContent>
                   </Select>
                 </div>

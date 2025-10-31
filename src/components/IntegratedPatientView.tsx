@@ -17,6 +17,8 @@ import {
   AlertTriangle
 } from "lucide-react";
 import { integrationManager } from "../services/integrationManager";
+import { getDisplayPatientId, getInternalPatientKey, normalizePatients, resolvePatientDisplay } from "../utils/patientId";
+import { fetchPatients } from "../services/api.js";
 import { EMRPatient, EMRAppointment, EMRTreatment } from "../services/emrIntegration";
 import { PharmacyTransaction } from "../services/pharmacyIntegration";
 
@@ -47,6 +49,8 @@ export function IntegratedPatientView({ patientId, onNavigateToView }: Integrate
     pharmacyTransactions: []
   });
 
+  const [patients, setPatients] = useState<any[]>([]);
+
   useEffect(() => {
     loadPatientData();
   }, [patientId]);
@@ -61,6 +65,13 @@ export function IntegratedPatientView({ patientId, onNavigateToView }: Integrate
 
       setData(patientData);
       setUnbilledItems(unbilled);
+      // also load system patients to resolve friendly IDs
+      try {
+        const p = await fetchPatients();
+        setPatients(normalizePatients(p || []));
+      } catch (e) {
+        // ignore - resolvePatientDisplay will hide raw ids when patients not available
+      }
     } catch (error) {
       console.error('Failed to load patient data:', error);
     } finally {
@@ -112,6 +123,8 @@ export function IntegratedPatientView({ patientId, onNavigateToView }: Integrate
       </Card>
     );
   }
+  const integratedPatientRawKey = ((data.patient as any)?.patientId) || ((data.patient as any)?.id) || ((data.patient as any)?._id);
+  const patientDisplay = resolvePatientDisplay(patients, integratedPatientRawKey) || `${data.patient.firstName} ${data.patient.lastName}`;
 
   const totalUnbilledAmount = 
     unbilledItems.treatments.reduce((sum, t) => sum + t.totalCost, 0) +
@@ -131,7 +144,7 @@ export function IntegratedPatientView({ patientId, onNavigateToView }: Integrate
                 <CardTitle className="text-xl">
                   {data.patient.firstName} {data.patient.lastName}
                 </CardTitle>
-                <p className="text-gray-600">Patient ID: {data.patient.patientId}</p>
+                <p className="text-gray-600">{patientDisplay}</p>
               </div>
             </div>
             <Badge variant="default" className="bg-green-100 text-green-800">

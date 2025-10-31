@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { pharmacyService, PharmacyTransaction } from "../services/pharmacyIntegration";
 import { billingService, BillingRecord as ServiceBillingRecord } from "../services/billingService";
 import { patientService } from "../services/patientService";
+import { getDisplayPatientId, getInternalPatientKey, resolvePatientDisplay } from "../utils/patientId";
 
 
 interface BillingHistoryProps {
@@ -57,10 +58,10 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
 
   const loadPatients = () => {
     const allPatients = patientService.getAllPatients();
-    const formattedPatients = allPatients.map(p => ({
-      id: p.id,
+    const formattedPatients = (allPatients || []).map((p:any) => ({
+      id: getInternalPatientKey(p),
       name: p.name,
-      fullDisplay: `${p.name} (${p.id})`
+      fullDisplay: `${p.name} (${getDisplayPatientId(p) || getInternalPatientKey(p)})`
     }));
     setPatients(formattedPatients);
   };
@@ -217,7 +218,7 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
           record.number,
           record.type.charAt(0).toUpperCase() + record.type.slice(1),
           `"${record.patientName}"`,
-          record.patientId,
+      patients.find(p => p.id === record.patientId)?.fullDisplay || resolvePatientDisplay(patients, record.patientId),
           `"${record.description}"`,
           record.department || '',
           record.paymentMethod || '',
@@ -255,7 +256,9 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
         day: 'numeric' 
       });
       
-      const reportHTML = `
+  const patientFilterDisplay = selectedPatientId ? (patients.find(p => p.id === selectedPatientId)?.fullDisplay || resolvePatientDisplay(patients, selectedPatientId)) : '';
+
+  const reportHTML = `
         <!DOCTYPE html>
         <html>
         <head>
@@ -357,7 +360,7 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
             <h1>MEDICARE HOSPITAL</h1>
             <p>Billing History Report</p>
             <p>Generated on: ${reportDate}</p>
-            ${selectedPatientId ? `<p>Patient Filter: ${patients.find(p => p.id === selectedPatientId)?.fullDisplay || 'Unknown'}</p>` : ''}
+            ${patientFilterDisplay ? `<p>Patient Filter: ${patientFilterDisplay}</p>` : ''}
             ${selectedFilter !== 'all' ? `<p>Type Filter: ${selectedFilter.charAt(0).toUpperCase() + selectedFilter.slice(1)}</p>` : ''}
           </div>
 
@@ -403,7 +406,7 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
                   <td>${new Date(record.date).toLocaleDateString('en-PH')}${record.time ? ` ${record.time}` : ''}</td>
                   <td>${record.number}</td>
                   <td><span class="badge badge-${record.type}">${record.type.charAt(0).toUpperCase() + record.type.slice(1)}</span></td>
-                  <td>${record.patientName}<br/><small style="color: #666;">${record.patientId}</small></td>
+                  <td>${record.patientName}<br/><small style="color: #666;">${patients.find(p => p.id === record.patientId)?.fullDisplay || resolvePatientDisplay(patients, record.patientId)}</small></td>
                   <td>${record.description}${record.department ? `<br/><small style="color: #666;">${record.department}</small>` : ''}</td>
                   <td style="font-weight: 600;">₱${record.amount.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</td>
                   <td><span class="badge badge-${record.status}">${record.status.charAt(0).toUpperCase() + record.status.slice(1)}</span></td>
@@ -630,10 +633,10 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
                 <span class="info-label">Patient Name</span>
                 <span class="info-value">${selectedRecord.patientName}</span>
               </div>
-              <div class="info-item">
-                <span class="info-label">Patient ID</span>
-                <span class="info-value">${selectedRecord.patientId}</span>
-              </div>
+                <div class="info-item">
+                  <span class="info-label">Patient ID</span>
+                  <span class="info-value">${patients.find(p => p.id === selectedRecord.patientId)?.fullDisplay || resolvePatientDisplay(patients, selectedRecord.patientId)}</span>
+                </div>
               ${selectedRecord.department ? `
                 <div class="info-item">
                   <span class="info-label">Department</span>
@@ -935,7 +938,7 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
                           <div className="flex items-center gap-4 text-sm text-gray-600">
                             <div className="flex items-center gap-1">
                               <User size={14} />
-                              <span>{record.patientName} ({record.patientId})</span>
+                              <span>{resolvePatientDisplay(patients, record.patientId)}</span>
                             </div>
                             <div className="flex items-center gap-1">
                               <Calendar size={14} />
@@ -1152,12 +1155,8 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
                   </Badge>
                 </div>
                 <div>
-                  <p className="text-sm text-gray-600">Patient Name</p>
-                  <p className="font-semibold">{selectedRecord.patientName}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-600">Patient ID</p>
-                  <p className="font-semibold">{selectedRecord.patientId}</p>
+                  <p className="text-sm text-gray-600">Patient</p>
+                  <p className="font-semibold">{resolvePatientDisplay(patients, selectedRecord.patientId)}</p>
                 </div>
                 <div>
                   <p className="text-sm text-gray-600">Date</p>
@@ -1285,25 +1284,8 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
                 </div>
               </div>
 
-              {/* Action Buttons: Process (navigate to Payment Processing) and Print */}
+              {/* Action Buttons: Print */}
               <div className="flex justify-end space-x-3">
-                <Button
-                  className="bg-[#358E83] hover:bg-[#358E83]/90 text-white"
-                  onClick={() => {
-                    try {
-                      // store selected invoice/record id for the Payment Processing view to pick up
-                      if (selectedRecord) {
-                        const sel = selectedRecord.number || selectedRecord.id || selectedRecord.number;
-                        window.localStorage.setItem('selectedInvoiceForProcessing', String(sel));
-                      }
-                    } catch (e) { /* ignore */ }
-                    onNavigateToView && onNavigateToView('payment-processing');
-                  }}
-                >
-                  <CreditCard className="mr-2" size={16} />
-                  Process
-                </Button>
-
                 <Button 
                   className="bg-[#E94D61] hover:bg-[#E94D61]/90 text-white"
                   onClick={handlePrintRecord}

@@ -8,6 +8,9 @@ const userSchema = new mongoose.Schema(
     role: { type: String, default: "user" },
     department: { type: String, default: "General" },
     status: { type: String, default: "Active" },
+    // Password reset fields (optional) - used for password reset tokens
+    resetToken: { type: String },
+    resetTokenExpires: { type: Number },
   },
   { timestamps: true }
 );

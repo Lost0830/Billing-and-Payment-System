@@ -53,6 +53,12 @@ export function MainLayout({
     // Admin users get Patient Management, Discount Management, User Management, and Settings
     if (userSession?.role === "admin") {
       baseItems.push({
+        id: "dashboard",
+        label: "Dashboard",
+        icon: Activity,
+        description: "Admin dashboard overview"
+      });
+      baseItems.push({
         id: "patients-management",
         label: "Patient Management",
         icon: UserCog,

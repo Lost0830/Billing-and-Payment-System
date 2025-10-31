@@ -8,7 +8,13 @@
     </head>
 
     <body>
-      <div id="root"></div>
+      <!-- Helpful fallback so a completely blank page shows a message and an inline script log -->
+      <div id="root">If the app appears blank, open DevTools Console to see errors.</div>
+      <script>
+        // Inline log to confirm index.html is served and the browser executed inline scripts
+        // If you don't see this in the Console, the browser didn't load the page resources.
+        console.log('index.html inline script executed');
+      </script>
       <script type="module" src="/src/main.tsx"></script>
     </body>
   </html>

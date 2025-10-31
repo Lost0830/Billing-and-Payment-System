@@ -396,8 +396,37 @@ export function UserManagement({ onNavigateToView }: UserManagementProps) {
   };
 
   const handleResetPassword = (user: User) => {
-    // Simulate sending password reset email
-    toast.success(`Password reset email sent to ${user.email}`);
+    // Call backend to send password reset email
+    (async () => {
+      try {
+        const res = await fetch(`/api/users/${user.id}/reset`, { method: 'POST' });
+        const text = await res.text();
+        const contentType = (res.headers.get('content-type') || '').toLowerCase();
+
+        if (!res.ok) {
+          const snippet = text ? text.substring(0, 400) : '';
+          throw new Error(snippet || `Server returned ${res.status}`);
+        }
+
+        let body: any = {};
+        if (contentType.includes('application/json') && text) {
+          try { body = JSON.parse(text); } catch (e) { /* ignore */ }
+        }
+
+        if (body?.previewUrl) {
+          // If using Ethereal test account, provide preview link
+          toast.success(`Password reset email sent to ${user.email} (preview available)`);
+          // show preview URL in console for convenience
+          console.info('Password reset preview URL:', body.previewUrl);
+          // also show a clickable browser alert (non-blocking) - keep short
+          // (UI to show link could be added later)
+        } else {
+          toast.success(body?.message || `Password reset email sent to ${user.email}`);
+        }
+      } catch (err: any) {
+        toast.error(err?.message || 'Failed to send password reset email');
+      }
+    })();
   };
 
   const handleSendInvitation = (user: User) => {

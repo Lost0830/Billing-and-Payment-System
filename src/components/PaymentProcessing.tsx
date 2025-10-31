@@ -28,10 +28,13 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "./ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { DiscountService, DiscountOption } from "../services/discountService";
+import { PriceListService } from "../services/priceListService";
 import { toast } from "sonner";
-import { fetchPayments, fetchPatients, fetchInvoices, createPayment, updateInvoice } from "../services/api.js";
+import { fetchPayments, fetchPatients, fetchInvoices } from "../services/api.js";
+import { MockEmrService } from "../services/mockEmrData";
 import { UserSession } from "../hooks/useAuth";
 import axios from "axios";
+import { getDisplayPatientId, getInternalPatientKey, normalizePatients, resolvePatientDisplay } from "../utils/patientId";
 
 
 const API_URL = "http://localhost:5000/api";
@@ -61,6 +64,11 @@ interface Payment {
   processedBy?: string;
   notes?: string;
   items?: any[];
+  // extras returned by normalizePayment or backend
+  raw?: any;
+  createdBy?: string;
+  createdAt?: string;
+  createdByRole?: string;
 }
 
 const PAYMENT_METHODS = [
@@ -101,6 +109,7 @@ export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
   const [processedPayment, setProcessedPayment] = useState<Payment | null>(null);
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [showReceiptDialog, setShowReceiptDialog] = useState(false);
+  const [initialSelectedInvoice, setInitialSelectedInvoice] = useState<string | null>(null);
   // receipt dialog is rendered via Dialog component (matches InvoiceGeneration)
   const [paymentToDelete, setPaymentToDelete] = useState<string | null>(null);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
@@ -108,6 +117,7 @@ export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
   // patients state to fetch demographics from DB
   const [patients, setPatients] = useState<any[]>([]);
   const [dynamicDiscounts, setDynamicDiscounts] = useState<DiscountOption[]>([]);
+  const [emrData, setEmrData] = useState<any | null>(null);
 
   // normalize server payment
   const normalizePayment = (p: any) => {
@@ -175,13 +185,29 @@ export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
   const fetchInvoicesFromDb = async () => {
     try {
       if (typeof fetchInvoices === "function") {
-        const invs = await fetchInvoices();
-        setAvailableInvoices(Array.isArray(invs) ? invs : (invs?.data || []));
+        const invs: any = await fetchInvoices();
+        const arr = Array.isArray(invs) ? invs : (invs?.data || []);
+        // normalize patientId to prefer friendly id when possible using patients state if already loaded
+        const normalized = arr.map((inv:any) => {
+          const pid = inv.patientId || inv.accountId || inv.patient || '';
+          // try to resolve friendly patient id from loaded patients
+          const found = (Array.isArray(patients) ? patients.find((p:any) => String(getInternalPatientKey(p)) === String(pid)) : null);
+          if (found) inv.patientId = getDisplayPatientId(found) || getInternalPatientKey(found) || inv.patientId;
+          return inv;
+        });
+        setAvailableInvoices(normalized);
         return;
       }
-      const res = await axios.get(`${API_URL}/invoices`);
-      const payload = res?.data;
-      setAvailableInvoices(Array.isArray(payload) ? payload : (payload?.data || []));
+  const res = await axios.get(`${API_URL}/invoices`);
+  const payload: any = res?.data;
+  const arr = Array.isArray(payload) ? payload : (payload?.data || []);
+      const normalized = arr.map((inv:any) => {
+        const pid = inv.patientId || inv.accountId || inv.patient || '';
+        const found = (Array.isArray(patients) ? patients.find((p:any) => String(getInternalPatientKey(p)) === String(pid)) : null);
+        if (found) inv.patientId = getDisplayPatientId(found) || getInternalPatientKey(found) || inv.patientId;
+        return inv;
+      });
+      setAvailableInvoices(normalized);
     } catch (err) {
       console.error("Error fetching invoices", err);
       setAvailableInvoices([]);
@@ -192,15 +218,28 @@ export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
   const fetchPaymentsFromDb = async () => {
     try {
       if (typeof fetchPayments === "function") {
-        const pays = await fetchPayments();
+        const pays: any = await fetchPayments();
         const arr = Array.isArray(pays) ? pays : (pays?.data || []);
-        setPayments(arr.map((p:any)=>normalizePayment(p)));
+        // normalize patient ids in payments when possible
+        const mapped = arr.map((p:any) => {
+          const pid = p.patientId || p.accountId || p.patient || '';
+          const found = (Array.isArray(patients) ? patients.find((x:any) => String(getInternalPatientKey(x)) === String(pid)) : null);
+          if (found) p.patientId = getDisplayPatientId(found) || getInternalPatientKey(found) || p.patientId;
+          return p;
+        });
+        setPayments(mapped.map((p:any)=>normalizePayment(p)));
         return;
       }
-      const res = await axios.get(`${API_URL}/payments`);
-      const payload = res?.data;
-      const arr = Array.isArray(payload) ? payload : (payload?.data || []);
-      setPayments(arr.map((p:any)=>normalizePayment(p)));
+  const res = await axios.get(`${API_URL}/payments`);
+  const payload: any = res?.data;
+  const arr = Array.isArray(payload) ? payload : (payload?.data || []);
+      const mapped = arr.map((p:any) => {
+        const pid = p.patientId || p.accountId || p.patient || '';
+        const found = (Array.isArray(patients) ? patients.find((x:any) => String(getInternalPatientKey(x)) === String(pid)) : null);
+        if (found) p.patientId = getDisplayPatientId(found) || getInternalPatientKey(found) || p.patientId;
+        return p;
+      });
+      setPayments(mapped.map((p:any)=>normalizePayment(p)));
     } catch (err) {
       console.error("Error fetching payments", err);
       setPayments([]);
@@ -219,13 +258,13 @@ export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
   const fetchPatientsFromDb = async () => {
     try {
       if (typeof fetchPatients === "function") {
-        const p = await fetchPatients();
-        setPatients(Array.isArray(p) ? p : (p?.data || []));
+        const p: any = await fetchPatients();
+        setPatients(Array.isArray(p) ? normalizePatients(p) : (p?.data || []));
         return;
       }
-      const res = await axios.get(`${API_URL}/patients`);
-      const payload = res?.data;
-      setPatients(Array.isArray(payload) ? payload : (payload?.data || []));
+  const res = await axios.get(`${API_URL}/patients`);
+  const payload: any = res?.data;
+  setPatients(Array.isArray(payload) ? normalizePatients(payload) : (payload?.data || []));
     } catch (err) {
       console.warn("Failed to fetch patients list:", err);
       setPatients([]);
@@ -241,8 +280,111 @@ export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
       }
     };
     load();
+    // Check if another view set an invoice for processing (InvoiceGeneration -> Process button)
+    try {
+      let pre = window.localStorage.getItem('selectedInvoiceForProcessing');
+      if (!pre) pre = window.localStorage.getItem('selectedInvoiceForProcessingNumber');
+      if (pre) {
+        setInitialSelectedInvoice(pre);
+        setShowProcessForm(true);
+        // remove immediately to avoid re-triggering later
+        try { window.localStorage.removeItem('selectedInvoiceForProcessing'); } catch(e) {}
+        try { window.localStorage.removeItem('selectedInvoiceForProcessingNumber'); } catch(e) {}
+      }
+    } catch (e) {}
+    // Listen for navigate-to events as a fallback integration path so
+    // the Process button on the invoice can reliably handoff even when
+    // routing or timing differs between components.
+    const navHandler = (ev: any) => {
+      try {
+        const d = ev?.detail || {};
+        if (!d) return;
+        // Accept either explicit view name or a small helper signal
+        if (d.view === 'payment-processing' || d.view === 'payment' || d.action === 'process-invoice') {
+          const key = d.invoiceId || d.invoiceNumber || d.selectedInvoice || d.invoice || null;
+          if (key) {
+            setInitialSelectedInvoice(String(key));
+            setShowProcessForm(true);
+            // ensure localStorage is also set so the existing flow can pick it up
+            try { window.localStorage.setItem('selectedInvoiceForProcessing', String(key)); } catch (e) {}
+            try { window.localStorage.setItem('selectedInvoiceForProcessingNumber', String(d.invoiceNumber || d.invoiceNo || d.number || key)); } catch (e) {}
+          }
+        }
+      } catch (e) { /* ignore */ }
+    };
+    window.addEventListener('navigate-to', navHandler as EventListener);
+
+    return () => {
+      window.removeEventListener('navigate-to', navHandler as EventListener);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Load EMR/mock data for the selected patient when invoice selection changes
+  useEffect(() => {
+    try {
+      const pkey = newPayment.patientId || '';
+      if (!pkey) {
+        setEmrData(null);
+        return;
+      }
+      const data = MockEmrService.getPatientEmrData(pkey);
+      setEmrData(data);
+    } catch (e) {
+      console.warn('Failed to load EMR data for patient', e);
+      setEmrData(null);
+    }
+  }, [newPayment.patientId, selectedInvoiceNumber]);
+
+  // If the app provided an invoice id/number via localStorage, pick it when invoices load
+  useEffect(() => {
+    if (!initialSelectedInvoice) return;
+    if (!availableInvoices || availableInvoices.length === 0) return;
+
+    const key = initialSelectedInvoice;
+    const invoice = availableInvoices.find(inv =>
+      (inv._id && String(inv._id) === String(key)) ||
+      (inv.id && String(inv.id) === String(key)) ||
+      (inv.number && String(inv.number) === String(key)) ||
+      (inv.invoiceNumber && String(inv.invoiceNumber) === String(key))
+    );
+
+    if (invoice) {
+      // reuse the same logic as when selecting from the combobox
+  const invoiceId = invoice.number || invoice.invoiceNumber || invoice.invoiceNo || invoice._id || invoice.id || "";
+  const rawPatientKey = invoice.patientId || invoice.patient || invoice.accountId || "";
+  const foundPatient = (Array.isArray(patients) ? patients.find((p:any) => String(getInternalPatientKey(p)) === String(rawPatientKey)) : null);
+  const patientId = foundPatient ? getInternalPatientKey(foundPatient) : rawPatientKey;
+  const patientName = invoice.patientName || (foundPatient ? foundPatient.name : invoice.patient || "");
+
+      setSelectedInvoiceNumber(invoiceId);
+      setNewPayment(prev => ({ ...prev, invoiceNumber: invoiceId, patientName, patientId }));
+
+      const computeSubtotal = (inv:any) => {
+        if (inv == null) return 0;
+        if (inv.subtotal !== undefined && inv.subtotal !== null) return Number(inv.subtotal);
+        if (inv.amount !== undefined && inv.amount !== null) return Number(inv.amount);
+        if (Array.isArray(inv.items) && inv.items.length > 0) return inv.items.reduce((s:number,it:any) => s + Number(it.totalPrice ?? it.amount ?? it.price ?? 0), 0);
+        if (Array.isArray(inv.lines) && inv.lines.length > 0) return inv.lines.reduce((s:number,it:any) => s + Number(it.totalPrice ?? it.amount ?? it.price ?? 0), 0);
+        return 0;
+      };
+      const subtotalVal = computeSubtotal(invoice);
+      if (subtotalVal && subtotalVal > 0) {
+        setSubtotalAmount(String(subtotalVal));
+        setNewPayment(prev => ({ ...prev, amount: String(subtotalVal) }));
+      }
+
+      if (invoice.discount && invoice.discount > 0) {
+        if (invoice.discountPercentage) { setDiscountType('percentage'); setDiscountValue(String(invoice.discountPercentage)); }
+        else { setDiscountType('fixed'); setDiscountValue(String(invoice.discount)); }
+        setDiscountLabel(invoice.discountType || "");
+      }
+
+      toast.success(`Invoice ${invoiceId} selected for processing`);
+      setInitialSelectedInvoice(null);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [availableInvoices, initialSelectedInvoice]);
 
   // Dialog component will handle portaling and focus management. No custom portal needed.
 
@@ -266,7 +408,7 @@ export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
   // helper to get patient age & sex from patients state
   const getPatientDemographics = (patientId: string) => {
     if (!patientId) return { age: 0, sex: "Unknown" };
-    const p = patients.find((x:any) => (x.patientId === patientId) || (x.id === patientId) || (x._id === patientId));
+    const p = patients.find((x:any) => String(getInternalPatientKey(x)) === String(patientId) || getDisplayPatientId(x) === String(patientId));
     if (!p) return { age: 0, sex: "Unknown" };
     // compute age if birthDate/birthdate exists
     const dob = p.birthDate || p.dateOfBirth || p.birthdate;
@@ -442,7 +584,7 @@ export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
           if (selInvoice.patient && typeof selInvoice.patient === 'object') return selInvoice.patient.name || `${selInvoice.patient.firstName || ''} ${selInvoice.patient.lastName || ''}`.trim();
           // fallback: try to resolve from patients list
           const pid = selInvoice.patientId || selInvoice.accountId || (selInvoice.patient && selInvoice.patient._id);
-          const p = patients.find((x: any) => x._id === pid || x.id === pid || x.patientId === pid);
+          const p = patients.find((x: any) => String(getInternalPatientKey(x)) === String(pid) || getDisplayPatientId(x) === String(pid));
           return p ? (p.name || `${p.firstName || ''} ${p.lastName || ''}`.trim()) : (selInvoice.patientName || selInvoice.patient || '');
         })()),
         amount: amountValue,
@@ -474,15 +616,11 @@ export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
         }
       }
 
-      // mark invoice as paid/completed if backend supports it
+      // mark invoice as paid/completed (best-effort)
       try {
-        if (typeof updateInvoice === "function") {
-          await updateInvoice(invoiceId, { status: "paid" });
-        } else {
-          // fallback: try PUT to invoices endpoint directly
-          await axios.put(`${API_URL}/invoices/${invoiceId}`, { status: "paid" });
-        }
+        await axios.put(`${API_URL}/invoices/${invoiceId}`, { status: "paid" });
       } catch (e) {
+        // non-fatal if backend doesn't expose this route
         console.warn("updateInvoice failed (non-fatal):", e);
       }
 
@@ -743,7 +881,7 @@ const isTaxableItem = (item: any): boolean => {
                           {getMethodIcon(payment.method)}
                           <div>
                             <h4 className="font-semibold">{payment.invoiceNumber}</h4>
-                            <p className="text-sm text-gray-600">{payment.patientName} ({payment.patientId})</p>
+                            <p className="text-sm text-gray-600">{resolvePatientDisplay(patients, payment.patientId || payment.id || payment._id)}</p>
                           </div>
                         </div>
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
@@ -862,9 +1000,9 @@ const isTaxableItem = (item: any): boolean => {
                             >
                               <Check className={`mr-2 h-4 w-4 ${(selectedInvoiceNumber === (invoice.number || invoice.invoiceNumber || invoice._id || "")) ? "opacity-100" : "opacity-0"}`} />
                               <div>
-                                <div className="font-medium">{invoice.number || invoice.invoiceNumber || invoice._id}</div>
-                              <div className="text-sm text-gray-500">
-                                  {invoice.patientName || (invoice.patient && (typeof invoice.patient === 'string' ? invoice.patient : invoice.patient.name))} ({invoice.patientId || ''}) - ₱{(() => {
+                                <div className="font-medium">{invoice.number || invoice.invoiceNumber || invoice.id || 'N/A'}</div>
+                <div className="text-sm text-gray-500">
+                  {invoice.patientName || (invoice.patient && (typeof invoice.patient === 'string' ? invoice.patient : invoice.patient.name))} ({resolvePatientDisplay(patients, invoice.patientId || invoice.patient || invoice.accountId)}) - ₱{(() => {
                                     const sub = (invoice.subtotal !== undefined && invoice.subtotal !== null) ? Number(invoice.subtotal) : (invoice.amount !== undefined && invoice.amount !== null ? Number(invoice.amount) : (Array.isArray(invoice.items) ? invoice.items.reduce((s:number,it:any)=> s + Number(it.totalPrice ?? it.amount ?? it.price ?? 0), 0) : 0));
                                     return sub.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
                                   })()}
@@ -890,6 +1028,124 @@ const isTaxableItem = (item: any): boolean => {
                 <Input type="number" value={subtotalAmount} onChange={(e) => setSubtotalAmount(e.target.value)} placeholder="Enter subtotal amount" />
               </div>
             </div>
+
+            {/* EMR / Medicines preview for cashier */}
+            {emrData && (
+              <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="font-medium">EMR Items Preview</h4>
+                    <p className="text-sm text-gray-600">Showing unbilled services and pharmacy items from the integrated EMR/mock data.</p>
+                  </div>
+                  <Badge className="bg-green-100 text-green-800">{emrData.status}</Badge>
+                </div>
+
+                <div className="flex items-start justify-between">
+                  <div>
+                    <h4 className="font-medium text-sm">EMR Items Preview</h4>
+                    <p className="text-xs text-gray-500">Review unbilled services and medicines before adding to invoice</p>
+                  </div>
+                  <div>
+                    <Button size="sm" onClick={() => {
+                      try {
+                        const key = newPayment.patientId || '';
+                        const data = MockEmrService.getPatientEmrData(key);
+                        if (data) {
+                          const items = [ ...(data.services || []).map((s:any, idx:number) => ({
+                            id: `emr-${s.serviceId}-${Date.now()}-${idx}`,
+                            description: s.service,
+                            quantity: s.quantity || 1,
+                            rate: PriceListService.getPrice ? PriceListService.getPrice(s.service, s.category) : 0,
+                            amount: (s.quantity || 1) * (PriceListService.getPrice ? PriceListService.getPrice(s.service, s.category) : 0),
+                            category: s.category || 'Consultation'
+                          })),
+                          ...(data.medicines || []).map((m:any, idx:number) => ({
+                            id: `emr-m-${m.medicineId || idx}-${Date.now()}`,
+                            description: m.name,
+                            quantity: m.quantity || 1,
+                            rate: PriceListService.getPrice ? PriceListService.getPrice(m.name, 'Pharmacy') : 0,
+                            amount: (m.quantity || 1) * (PriceListService.getPrice ? PriceListService.getPrice(m.name, 'Pharmacy') : 0),
+                            category: 'Pharmacy'
+                          }))];
+                          window.dispatchEvent(new CustomEvent('emr-add-to-invoice', { detail: { patientId: key, items } }));
+                          toast.success(`Added ${items.length} EMR items to invoice form`);
+                        } else {
+                          toast.info('No EMR items to add');
+                        }
+                      } catch (e) { console.error(e); toast.error('Failed to add EMR items'); }
+                    }}>
+                      Add All to Invoice
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
+                  <div>
+                    <p className="text-sm text-gray-500 mb-2">Services</p>
+                    <div className="space-y-2">
+                      {(emrData.services || []).map((s: any, idx: number) => {
+                        const rate = PriceListService.getPrice ? PriceListService.getPrice(s.service, s.category) : 0;
+                        const invItem = {
+                          id: `emr-${s.serviceId}-${Date.now()}-${idx}`,
+                          description: s.service,
+                          quantity: s.quantity || 1,
+                          rate,
+                          amount: (s.quantity || 1) * (rate || 0),
+                          category: s.category || 'Consultation'
+                        };
+                        return (
+                          <div key={`emr-s-${idx}`} className="p-2 border rounded bg-white flex items-start justify-between">
+                            <div>
+                              <div className="font-medium">{s.service}</div>
+                              <div className="text-xs text-gray-500">{s.category} • {s.quantity} • {s.date}</div>
+                              {s.notes && <div className="text-xs text-gray-600 mt-1">{s.notes}</div>}
+                            </div>
+                            <div className="ml-3">
+                              <Button size="sm" onClick={() => { try { window.dispatchEvent(new CustomEvent('emr-add-to-invoice', { detail: { patientId: newPayment.patientId || '', items: [invItem] } })); toast.success('Added EMR service to invoice form'); } catch (e) { console.error(e); toast.error('Failed to add item'); } }}>
+                                Add
+                              </Button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {(!emrData.services || emrData.services.length === 0) && <div className="text-sm text-gray-500">No EMR services</div>}
+                    </div>
+                  </div>
+
+                  <div>
+                    <p className="text-sm text-gray-500 mb-2">Medicines</p>
+                    <div className="space-y-2">
+                      {((emrData.medicines) || []).map((m: any, idx: number) => {
+                        const rate = PriceListService.getPrice ? PriceListService.getPrice(m.name, 'Pharmacy') : 0;
+                        const invItem = {
+                          id: `emr-m-${m.medicineId || idx}-${Date.now()}`,
+                          description: m.name,
+                          quantity: m.quantity || 1,
+                          rate,
+                          amount: (m.quantity || 1) * (rate || 0),
+                          category: 'Pharmacy'
+                        };
+                        return (
+                          <div key={`emr-m-${idx}`} className="p-2 border rounded bg-white flex items-start justify-between">
+                            <div>
+                              <div className="font-medium">{m.name}</div>
+                              <div className="text-xs text-gray-500">{m.strength || m.form || ''} • Qty: {m.quantity} • {m.datePrescribed || m.date}</div>
+                              {m.instructions && <div className="text-xs text-gray-600 mt-1">{m.instructions}</div>}
+                            </div>
+                            <div className="ml-3">
+                              <Button size="sm" onClick={() => { try { window.dispatchEvent(new CustomEvent('emr-add-to-invoice', { detail: { patientId: newPayment.patientId || '', items: [invItem] } })); toast.success('Added EMR medicine to invoice form'); } catch (e) { console.error(e); toast.error('Failed to add medicine'); } }}>
+                                Add
+                              </Button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {(!emrData.medicines || emrData.medicines.length === 0) && <div className="text-sm text-gray-500">No EMR medicines</div>}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Discount & breakdown */}
             {subtotalAmount && subtotalAmount !== "" && (
@@ -1096,9 +1352,9 @@ const isTaxableItem = (item: any): boolean => {
                     <p className="text-sm text-gray-600">Patient Name:</p>
                     <p className="font-semibold">{processedPayment.patientName}</p>
                   </div>
-                  <div>
+                      <div>
                     <p className="text-sm text-gray-600">Patient ID:</p>
-                    <p className="font-semibold">{processedPayment.patientId || processedPayment.id || 'N/A'}</p>
+                    <p className="font-semibold">{resolvePatientDisplay(patients, processedPayment?.patientId || processedPayment?.id || processedPayment?._id)}</p>
                   </div>
                   <div>
                     <p className="text-sm text-gray-600">Age / Sex:</p>

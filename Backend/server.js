@@ -2,6 +2,8 @@ import express from "express";
 import mongoose from "mongoose";
 import dotenv from "dotenv";
 import cors from "cors";
+import crypto from "crypto";
+import nodemailer from "nodemailer";
 import User from "./models/users.js";
 import Patient from "./models/patient.js";
 import Billing from "./models/billing.js";
@@ -204,6 +206,66 @@ app.patch("/api/users/:id", async (req, res) => {
   } catch (err) {
     console.error('Update user error:', err);
     res.status(500).json({ success: false, message: 'Server error updating user', error: err.message });
+  }
+});
+
+// Password reset endpoint - sends an email with a reset token/link
+app.post("/api/users/:id/reset", async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+
+    // generate token and expiry (1 hour)
+    const token = crypto.randomBytes(20).toString("hex");
+    const expires = Date.now() + 3600 * 1000; // 1 hour
+
+    user.resetToken = token;
+    user.resetTokenExpires = expires;
+    await user.save();
+
+    const frontendBase = process.env.FRONTEND_URL || "http://localhost:5173";
+    const resetUrl = `${frontendBase}/reset-password?token=${token}&id=${user._id}`;
+
+    // Configure transporter - prefer explicit SMTP from env, otherwise use Ethereal test account
+    let transporter;
+    if (process.env.SMTP_HOST && process.env.SMTP_USER) {
+      transporter = nodemailer.createTransport({
+        host: process.env.SMTP_HOST,
+        port: Number(process.env.SMTP_PORT || 587),
+        secure: process.env.SMTP_SECURE === "true",
+        auth: {
+          user: process.env.SMTP_USER,
+          pass: process.env.SMTP_PASS,
+        },
+      });
+    } else {
+      // create a disposable test account (Ethereal) so developers can preview email in local dev
+      const testAccount = await nodemailer.createTestAccount();
+      transporter = nodemailer.createTransport({
+        host: testAccount.smtp.host,
+        port: testAccount.smtp.port,
+        secure: testAccount.smtp.secure,
+        auth: { user: testAccount.user, pass: testAccount.pass },
+      });
+    }
+
+    const info = await transporter.sendMail({
+      from: process.env.EMAIL_FROM || '"HIMS" <no-reply@hims.local>',
+      to: user.email,
+      subject: "Password Reset Request",
+      text: `You requested a password reset. Use this link to reset your password: ${resetUrl}`,
+      html: `<p>You requested a password reset. Click the link below to reset your password (expires in 1 hour):</p><p><a href="${resetUrl}">${resetUrl}</a></p>`,
+    });
+
+    // Provide test preview URL when using Ethereal
+    const previewUrl = nodemailer.getTestMessageUrl(info) || null;
+
+    console.log(`Password reset email attempt for ${user.email}. previewUrl=${previewUrl}`);
+
+    res.json({ success: true, message: "Password reset email sent", previewUrl });
+  } catch (err) {
+    console.error("Password reset error:", err);
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 

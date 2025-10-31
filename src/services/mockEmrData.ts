@@ -12,6 +12,17 @@ export interface PatientService {
   notes?: string;
 }
 
+export interface PatientMedicine {
+  medicineId: string;
+  name: string;
+  form?: string; // e.g., tablet, suspension, injection
+  strength?: string; // e.g., 500mg
+  quantity: number;
+  datePrescribed: string;
+  prescribedBy?: string;
+  instructions?: string;
+}
+
 export interface PatientEmrData {
   patientId: string;
   patientName: string;
@@ -19,13 +30,14 @@ export interface PatientEmrData {
   dischargeDate?: string;
   status: 'admitted' | 'discharged' | 'outpatient';
   services: PatientService[];
+  medicines?: PatientMedicine[];
 }
 
 // Mock EMR database with realistic patient service data
 const MOCK_EMR_DATABASE: Record<string, PatientEmrData> = {
   "P001": {
     patientId: "P001",
-    patientName: "Maria Santos",
+    patientName: "Juan Santos",
     admissionDate: "2025-01-03",
     status: "discharged",
     dischargeDate: "2025-01-05",
@@ -36,8 +48,8 @@ const MOCK_EMR_DATABASE: Record<string, PatientEmrData> = {
         category: "Consultation Services",
         quantity: 1,
         date: "2025-01-03",
-        provider: "Dr. Juan Reyes",
-        notes: "Initial assessment for abdominal pain"
+        provider: "Dr. John",
+        notes: "Routine checkup and medication review"
       },
       {
         serviceId: "S002",
@@ -50,61 +62,39 @@ const MOCK_EMR_DATABASE: Record<string, PatientEmrData> = {
       },
       {
         serviceId: "S003",
-        service: "Ultrasound",
-        category: "Diagnostic Services",
-        quantity: 1,
-        date: "2025-01-03",
-        provider: "Radiology Department",
-        notes: "Abdominal ultrasound"
-      },
-      {
-        serviceId: "S004",
         service: "Pharmacy - Medications",
         category: "Pharmacy",
         quantity: 1,
         date: "2025-01-04",
         provider: "Pharmacy",
-        notes: "Paracetamol 500mg x20, Amoxicillin 500mg x21, Mefenamic Acid 500mg x10"
+        notes: "Paracetamol 500mg x10, Cetrizine 10mg x10"
+      }
+    ],
+    medicines: [
+      {
+        medicineId: "M001",
+        name: "Paracetamol",
+        form: "tablet",
+        strength: "500mg",
+        quantity: 10,
+        datePrescribed: "2025-01-04",
+        prescribedBy: "Dr. John",
+        instructions: "Take 1 tablet every 6 hours as needed for pain"
+      },
+      {
+        medicineId: "M002",
+        name: "Cetirizine",
+        form: "tablet",
+        strength: "10mg",
+        quantity: 10,
+        datePrescribed: "2025-01-04",
+        prescribedBy: "Dr. John",
+        instructions: "Take 1 tablet daily at night for allergies"
       }
     ]
   },
   "P002": {
     patientId: "P002",
-    patientName: "Juan Dela Cruz",
-    admissionDate: "2025-01-04",
-    status: "outpatient",
-    services: [
-      {
-        serviceId: "S005",
-        service: "Specialist Consultation",
-        category: "Consultation Services",
-        quantity: 1,
-        date: "2025-01-04",
-        provider: "Dr. Maria Garcia - Cardiologist",
-        notes: "Follow-up for hypertension"
-      },
-      {
-        serviceId: "S006",
-        service: "ECG",
-        category: "Diagnostic Services",
-        quantity: 1,
-        date: "2025-01-04",
-        provider: "Cardiology Department",
-        notes: "Routine ECG"
-      },
-      {
-        serviceId: "S007",
-        service: "Blood Chemistry",
-        category: "Laboratory Services",
-        quantity: 1,
-        date: "2025-01-04",
-        provider: "Lab Department",
-        notes: "Lipid profile"
-      }
-    ]
-  },
-  "P003": {
-    patientId: "P003",
     patientName: "Anna Reyes",
     admissionDate: "2025-01-02",
     status: "discharged",
@@ -127,6 +117,114 @@ const MOCK_EMR_DATABASE: Record<string, PatientEmrData> = {
         date: "2025-01-02",
         provider: "Dr. Roberto Santos - Neurologist",
         notes: "Neurological evaluation"
+      },
+      {
+        serviceId: "S010",
+        service: "Pharmacy - Medications",
+        category: "Pharmacy",
+        quantity: 1,
+        date: "2025-01-03",
+        provider: "Pharmacy",
+        notes: "Ibuprofen 400mg x15, Omeprazole 20mg x14"
+      }
+    ],
+    medicines: [
+      {
+        medicineId: "M003",
+        name: "Ibuprofen",
+        form: "tablet",
+        strength: "400mg",
+        quantity: 15,
+        datePrescribed: "2025-01-03",
+        prescribedBy: "Dr. Roberto Santos",
+        instructions: "Take 1 tablet every 8 hours as needed for pain"
+      },
+      {
+        medicineId: "M004",
+        name: "Omeprazole",
+        form: "tablet",
+        strength: "20mg",
+        quantity: 14,
+        datePrescribed: "2025-01-03",
+        prescribedBy: "Dr. Roberto Santos",
+        instructions: "Take 1 tablet daily before breakfast"
+      }
+    ]
+  },
+  "P003": {
+    patientId: "P003",
+    patientName: "Maria Santos",
+    admissionDate: "2025-01-03",
+    status: "discharged",
+    dischargeDate: "2025-01-05",
+    services: [
+      {
+        serviceId: "S011",
+        service: "General Consultation",
+        category: "Consultation Services",
+        quantity: 1,
+        date: "2025-01-03",
+        provider: "Dr. John",
+        notes: "Initial assessment for abdominal pain"
+      },
+      {
+        serviceId: "S012",
+        service: "Complete Blood Count",
+        category: "Laboratory Services",
+        quantity: 1,
+        date: "2025-01-03",
+        provider: "Lab Department",
+        notes: "Routine blood work"
+      },
+      {
+        serviceId: "S013",
+        service: "Ultrasound",
+        category: "Diagnostic Services",
+        quantity: 1,
+        date: "2025-01-03",
+        provider: "Radiology Department",
+        notes: "Abdominal ultrasound"
+      },
+      {
+        serviceId: "S014",
+        service: "Pharmacy - Medications",
+        category: "Pharmacy",
+        quantity: 1,
+        date: "2025-01-04",
+        provider: "Pharmacy",
+        notes: "Paracetamol 500mg x20, Amoxicillin 500mg x21, Mefenamic Acid 500mg x10"
+      }
+    ],
+    medicines: [
+      {
+        medicineId: "M005",
+        name: "Paracetamol",
+        form: "tablet",
+        strength: "500mg",
+        quantity: 20,
+        datePrescribed: "2025-01-04",
+        prescribedBy: "Dr. John",
+        instructions: "Take 1-2 tablets every 4-6 hours as needed; do not exceed 8 tablets/day"
+      },
+      {
+        medicineId: "M006",
+        name: "Amoxicillin",
+        form: "capsule",
+        strength: "500mg",
+        quantity: 21,
+        datePrescribed: "2025-01-04",
+        prescribedBy: "Dr. John",
+        instructions: "Take 1 capsule every 8 hours for 7 days"
+      },
+      {
+        medicineId: "M007",
+        name: "Mefenamic Acid",
+        form: "tablet",
+        strength: "500mg",
+        quantity: 10,
+        datePrescribed: "2025-01-04",
+        prescribedBy: "Dr. John",
+        instructions: "Take 1 tablet every 8 hours as needed for pain; avoid if bleeding disorder present"
       }
     ]
   },
@@ -391,22 +489,39 @@ const MOCK_EMR_DATABASE: Record<string, PatientEmrData> = {
 export class MockEmrService {
   // Get patient services from EMR
   static getPatientServices(patientId: string): PatientService[] {
-    const patientData = MOCK_EMR_DATABASE[patientId];
-    if (!patientData) {
-      return [];
-    }
-    return patientData.services;
+    const pd = this.getPatientEmrData(patientId);
+    if (!pd) return [];
+    return pd.services || [];
   }
   
   // Get full patient EMR data
   static getPatientEmrData(patientId: string): PatientEmrData | null {
-    return MOCK_EMR_DATABASE[patientId] || null;
+    if (!patientId) return null;
+    const key = String(patientId).trim();
+    // direct hit
+    if (MOCK_EMR_DATABASE[key]) return MOCK_EMR_DATABASE[key];
+    // try uppercase (P###) tolerant lookup
+    const up = key.toUpperCase();
+    if (MOCK_EMR_DATABASE[up]) return MOCK_EMR_DATABASE[up];
+
+    // fallback: try to find by matching stored patientId case-insensitively
+    const found = Object.values(MOCK_EMR_DATABASE).find((v) => String(v.patientId || '').toLowerCase() === key.toLowerCase() || String(v.patientId || '').toLowerCase() === up.toLowerCase());
+    if (found) return found as PatientEmrData;
+
+    // last-resort: try to match numeric suffix (e.g., passing db id that contains the P###)
+    const suffixMatch = key.match(/p?(\d{1,})$/i);
+    if (suffixMatch) {
+      const pLike = `P${String(suffixMatch[1]).padStart(3, '0')}`;
+      if (MOCK_EMR_DATABASE[pLike]) return MOCK_EMR_DATABASE[pLike];
+    }
+
+    return null;
   }
   
   // Check if patient has unbilled services
   static hasUnbilledServices(patientId: string): boolean {
     const services = this.getPatientServices(patientId);
-    return services.length > 0;
+    return Array.isArray(services) && services.length > 0;
   }
   
   // Get patient status

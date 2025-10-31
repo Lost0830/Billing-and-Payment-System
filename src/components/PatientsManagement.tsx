@@ -15,6 +15,7 @@ import {
   Eye, 
   Edit, 
   Trash2, 
+  X,
   Phone, 
   Mail, 
   MapPin, 
@@ -28,7 +29,10 @@ import {
 } from "lucide-react";
 // import shared helpers and local service (use .js so Vite resolves the JS module)
 import { fetchPatients } from "../services/api.js";
+import { MockEmrService } from "../services/mockEmrData";
+import { PriceListService } from "../services/priceListService";
 import * as patientService from "../services/patientService.js";
+import { getDisplayPatientId, getInternalPatientKey, normalizePatients } from "../utils/patientId";
 import { toast } from "sonner";
 // normalize import shape (works whether patientService exports default or named)
 const ps: any = (patientService as any)?.default || (patientService as any) || {};
@@ -56,6 +60,7 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
   const [showAddMedicineDialog, setShowAddMedicineDialog] = useState(false);
   const [activeTab, setActiveTab] = useState("all");
   const [editingPatientId, setEditingPatientId] = useState<string | null>(null);
+  // Helpers moved to src/utils/patientId.ts
 
   // Form states
   const [patientForm, setPatientForm] = useState({
@@ -91,7 +96,8 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
   const fetchPatientsFromDb = async () => {
     try {
       const data = await fetchPatients();
-      const normalized = data.map((p: any) => ({ ...p, id: p._id || p.id || p.patientId || "" }));
+  // normalize to prefer human-friendly patientId for display
+  const normalized = normalizePatients(data || []);
       setPatients(normalized);
     } catch (err) {
       console.error("fetchPatientsFromDb error:", err);
@@ -103,8 +109,25 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
   useEffect(() => {
     fetchPatientsFromDb();
   }, []);
-  
-  const handleViewPatient = (patient) => {
+
+  // Helper to robustly resolve EMR/mock data for a patient using multiple possible keys
+  const getEmrDataForPatient = (patient: any) => {
+    if (!patient) return null;
+    const candidates = [
+      getInternalPatientKey(patient),
+      patient.patientId,
+      patient.id,
+      patient._id,
+      getDisplayPatientId(patient)
+    ];
+    for (const k of candidates) {
+      if (!k) continue;
+      const data = MockEmrService.getPatientEmrData(String(k));
+      if (data) return data;
+    }
+    return null;
+  };
+  const handleViewPatient = (patient: any) => {
     setSelectedPatient(patient);
     setShowPatientDialog(true);
   };
@@ -179,7 +202,7 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
         throw new Error(body?.message || `Create failed: ${res.status}`);
       }
 
-      const created = { ...(body.data || {}), id: (body.data?.id || body.data?._id || "") };
+  const created = { ...(body.data || {}), id: (body.data?.patientId || body.data?.id || body.data?._id || "") };
       setPatients((prev: any[]) => [created, ...prev]);
 
       // sync patientService if exists
@@ -212,7 +235,7 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
       const body = await res.json();
       console.log("updatePatient response:", res.status, body);
       if (!res.ok || !body.success) throw new Error(body?.message || "Update failed");
-      const updated = { ...(body.data || {}), id: (body.data?.id || body.data?._id || id) };
+  const updated = { ...(body.data || {}), id: (body.data?.patientId || body.data?.id || body.data?._id || id) };
       setPatients((prev: any[]) => prev.map(p => (p.id === id || p._id === id ? updated : p)));
       if (typeof (patientService as any).setPatients === "function") {
         (patientService as any).setPatients((patientService as any).getAllPatients?.() || []);
@@ -252,7 +275,7 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
   };
 
   const handleEditPatient = (patient: any) => {
-    setEditingPatientId(patient.id || patient._id || patient.patientId || null);
+    setEditingPatientId(getInternalPatientKey(patient) || null);
     setPatientForm({
       name: patient.name || "",
       dateOfBirth: patient.dateOfBirth ? patient.dateOfBirth.split("T")[0] : "",
@@ -373,14 +396,14 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
 
   const filteredPatients = patients.filter((patient: any) => {
     const term = (searchQuery || "").toLowerCase();
-    const pid = (patient?.id || patient?._id || patient?.patientId || "").toString().toLowerCase();
+    const pid = (getDisplayPatientId(patient) || "").toString().toLowerCase();
     const name = (patient?.name || "").toString().toLowerCase();
     const contact = (patient?.contactNumber || "").toString().toLowerCase();
     return pid.includes(term) || name.includes(term) || contact.includes(term);
   });
 
   const getPatientCharges = (patient: any) => {
-    const pid = patient?.id || patient?._id || patient?.patientId;
+    const pid = getInternalPatientKey(patient);
     if (typeof ps.getPatientTotalCharges === "function" && pid) {
       try {
         return ps.getPatientTotalCharges(pid);
@@ -527,7 +550,7 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
               </div>
             ) : (
               filteredPatients.map((patient, idx) => {
-                const pid = patient?.id || patient?._id || patient?.patientId || `p-${idx}`;
+                const internalId = getInternalPatientKey(patient) || `p-${idx}`;
                 const charges = getPatientCharges(patient);
                 const age = (patient?.dateOfBirth)
                   ? (typeof ps.calculateAge === 'function' ? ps.calculateAge(patient.dateOfBirth) : calculateAgeLocal(patient.dateOfBirth))
@@ -535,7 +558,7 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
                 
                 return (
                   <div
-                    key={pid}
+                    key={internalId}
                     className="border rounded-lg p-4 hover:shadow-md transition-shadow"
                   >
                     <div className="flex items-start justify-between">
@@ -554,7 +577,7 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
                               )}
                             </div>
                             <p className="text-sm text-gray-600">
-                              {patient.id} • {age} years old • {patient.sex}
+                              {getDisplayPatientId(patient)} • {age} years old • {patient.sex}
                               {patient.createdBy && (
                                 <span className="text-gray-500"> • Created by {patient.createdBy}</span>
                               )}
@@ -609,7 +632,7 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
                           <Button variant="ghost" size="sm" onClick={() => handleEditPatient(patient)}>
                             <Edit className="h-4 w-4 mr-2" /> Edit
                           </Button>
-                          <Button variant="destructive" size="sm" onClick={() => deletePatient(patient.id || patient._id || patient.patientId)}>
+                          <Button variant="destructive" size="sm" onClick={() => deletePatient(getInternalPatientKey(patient))}>
                             <Trash2 className="h-4 w-4 mr-2" /> Delete
                           </Button>
                         </div>
@@ -623,154 +646,210 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
         </CardContent>
       </Card>
 
-      {/* Patient Details Dialog */}
-      <Dialog open={showPatientDialog} onOpenChange={setShowPatientDialog}>
-        <DialogContent className="w-[95vw] max-w-4xl p-6">
-          <DialogHeader>
-            <DialogTitle className="text-2xl font-semibold">
-              Patient Details
-            </DialogTitle>
-            <DialogDescription>
-              View and manage patient information, services, and billing
-            </DialogDescription>
-          </DialogHeader>
-
-          {selectedPatient && (
+      {/* Patient Details Panel (right-side fixed panel) */}
+      {showPatientDialog && selectedPatient && (
+        <div className="fixed right-0 top-0 h-full w-[min(1000px,85vw)] bg-white p-4 md:p-6 shadow-2xl overflow-auto z-50" role="dialog" aria-modal="true">
+          <div className="mb-4 flex items-start justify-between">
             <div>
+              <h2 className="text-2xl font-semibold">Patient Details</h2>
+              <p className="text-sm text-gray-600">View and manage patient information, services, and billing</p>
+            </div>
+            <div>
+              <Button variant="ghost" onClick={() => setShowPatientDialog(false)}>
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+
+          <div className="h-full grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="overflow-y-auto pr-2">
               {/* Patient Info */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                <div>
-                  <Label className="text-sm font-medium">Patient ID</Label>
-                  <p className="text-lg font-semibold text-gray-900">
-                    {selectedPatient.id || selectedPatient._id}
-                  </p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                  <div>
+                    <Label className="text-sm font-medium">Patient ID</Label>
+                    <p className="text-lg font-semibold text-gray-900">{getDisplayPatientId(selectedPatient)}</p>
+                  </div>
+                  <div>
+                    <Label className="text-sm font-medium">Name</Label>
+                    <p className="text-lg font-semibold text-gray-900">{selectedPatient.name}</p>
+                  </div>
+                  <div>
+                    <Label className="text-sm font-medium">Date of Birth</Label>
+                    <p className="text-lg font-semibold text-gray-900">{selectedPatient.dateOfBirth ? new Date(selectedPatient.dateOfBirth).toLocaleDateString() : 'N/A'}</p>
+                  </div>
+                  <div>
+                    <Label className="text-sm font-medium">Sex</Label>
+                    <p className="text-lg font-semibold text-gray-900">{selectedPatient.sex}</p>
+                  </div>
+                  <div>
+                    <Label className="text-sm font-medium">Contact Number</Label>
+                    <p className="text-lg font-semibold text-gray-900">{selectedPatient.contactNumber || 'N/A'}</p>
+                  </div>
+                  <div>
+                    <Label className="text-sm font-medium">Email</Label>
+                    <p className="text-lg font-semibold text-gray-900">{selectedPatient.email || 'N/A'}</p>
+                  </div>
+                  <div>
+                    <Label className="text-sm font-medium">Address</Label>
+                    <p className="text-lg font-semibold text-gray-900">{selectedPatient.address || 'N/A'}</p>
+                  </div>
+                  <div>
+                    <Label className="text-sm font-medium">Blood Type</Label>
+                    <p className="text-lg font-semibold text-gray-900">{selectedPatient.bloodType || 'N/A'}</p>
+                  </div>
                 </div>
-                <div>
-                  <Label className="text-sm font-medium">Name</Label>
-                  <p className="text-lg font-semibold text-gray-900">
-                    {selectedPatient.name}
-                  </p>
-                </div>
-                <div>
-                  <Label className="text-sm font-medium">Date of Birth</Label>
-                  <p className="text-lg font-semibold text-gray-900">
-                    {selectedPatient.dateOfBirth ? new Date(selectedPatient.dateOfBirth).toLocaleDateString() : 'N/A'}
-                  </p>
-                </div>
-                <div>
-                  <Label className="text-sm font-medium">Sex</Label>
-                  <p className="text-lg font-semibold text-gray-900">
-                    {selectedPatient.sex}
-                  </p>
-                </div>
-                <div>
-                  <Label className="text-sm font-medium">Contact Number</Label>
-                  <p className="text-lg font-semibold text-gray-900">
-                    {selectedPatient.contactNumber || 'N/A'}
-                  </p>
-                </div>
-                <div>
-                  <Label className="text-sm font-medium">Email</Label>
-                  <p className="text-lg font-semibold text-gray-900">
-                    {selectedPatient.email || 'N/A'}
-                  </p>
-                </div>
-                <div>
-                  <Label className="text-sm font-medium">Address</Label>
-                  <p className="text-lg font-semibold text-gray-900">
-                    {selectedPatient.address || 'N/A'}
-                  </p>
-                </div>
-                <div>
-                  <Label className="text-sm font-medium">Blood Type</Label>
-                  <p className="text-lg font-semibold text-gray-900">
-                    {selectedPatient.bloodType || 'N/A'}
-                  </p>
-                </div>
-              </div>
 
-              <Separator className="my-6" />
+                <Separator className="my-6" />
 
-              {/* Emergency Contact */}
-              <div className="mb-6">
-                <Label className="text-sm font-medium">Emergency Contact</Label>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <p className="text-sm text-gray-500">Name</p>
-                    <p className="text-lg font-semibold text-gray-900">
-                      {selectedPatient.emergencyContact?.name || 'N/A'}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-500">Relationship</p>
-                    <p className="text-lg font-semibold text-gray-900">
-                      {selectedPatient.emergencyContact?.relationship || 'N/A'}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-500">Phone</p>
-                    <p className="text-lg font-semibold text-gray-900">
-                      {selectedPatient.emergencyContact?.phone || 'N/A'}
-                    </p>
+                {/* Emergency Contact */}
+                <div className="mb-6">
+                  <Label className="text-sm font-medium">Emergency Contact</Label>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <p className="text-sm text-gray-500">Name</p>
+                      <p className="text-lg font-semibold text-gray-900">{selectedPatient.emergencyContact?.name || 'N/A'}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-500">Relationship</p>
+                      <p className="text-lg font-semibold text-gray-900">{selectedPatient.emergencyContact?.relationship || 'N/A'}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-500">Phone</p>
+                      <p className="text-lg font-semibold text-gray-900">{selectedPatient.emergencyContact?.phone || 'N/A'}</p>
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              <Separator className="my-6" />
+                <Separator className="my-6" />
 
-              {/* Services and Medicines */}
-              <div className="mb-6">
-                <Label className="text-sm font-medium">Services and Medicines</Label>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <p className="text-sm text-gray-500">Total Services</p>
-                    <p className="text-lg font-semibold text-gray-900">
-                      {selectedPatient.services?.length || 0} services
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-500">Total Medicines</p>
-                    <p className="text-lg font-semibold text-gray-900">
-                      {selectedPatient.medicines?.length || 0} items
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-500">Total Charges</p>
-                    <p className="text-lg font-semibold text-gray-900">
-                      ₱{getPatientCharges(selectedPatient).total.toLocaleString('en-PH', { minimumFractionDigits: 2 })}
-                    </p>
+                {/* Services and Medicines */}
+                <div className="mb-6">
+                  <Label className="text-sm font-medium">Services and Medicines</Label>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <p className="text-sm text-gray-500">Total Services</p>
+                      <p className="text-lg font-semibold text-gray-900">{selectedPatient.services?.length || 0} services</p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-500">Total Medicines</p>
+                      <p className="text-lg font-semibold text-gray-900">{selectedPatient.medicines?.length || 0} items</p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-500">Total Charges</p>
+                      <p className="text-lg font-semibold text-gray-900">₱{getPatientCharges(selectedPatient).total.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</p>
+                    </div>
                   </div>
                 </div>
               </div>
 
-              <div className="flex flex-col md:flex-row gap-4">
-                <Button
-                  onClick={() => {
-                    setShowPatientDialog(false);
-                    handleEditPatient(selectedPatient);
-                  }}
-                  className="flex-1"
-                >
-                  <Edit className="mr-2 h-4 w-4" />
-                  Edit Patient
-                </Button>
-                <Button
-                  variant="destructive"
-                  onClick={() => deletePatient(selectedPatient.id || selectedPatient._id || selectedPatient.patientId)}
-                  className="flex-1"
-                >
-                  <Trash2 className="mr-2 h-4 w-4" />
-                  Delete Patient
-                </Button>
+              <div className="overflow-y-auto pl-2">
+                <div className="mb-6">
+                  <Label className="text-sm font-medium">Detailed Items</Label>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
+                    <div>
+                      <p className="text-sm text-gray-500 mb-2">Services (Local / EMR)</p>
+                      <div className="space-y-2">
+                        {(selectedPatient.services || []).map((s: any, i: number) => (
+                          <div key={`local-s-${i}`} className="p-2 border rounded bg-white">
+                            <div className="font-medium">{s.description || s.service || s.name}</div>
+                            <div className="text-xs text-gray-500">{s.category || s.group || ''} • {s.quantity || 1} • {s.date || ''}</div>
+                            {s.notes && <div className="text-xs text-gray-600 mt-1">{s.notes}</div>}
+                          </div>
+                        ))}
+
+                        {(() => {
+                          try {
+                            const emr = getEmrDataForPatient(selectedPatient);
+                            if (emr && Array.isArray(emr.services) && emr.services.length > 0) {
+                              return emr.services.map((es: any, idx: number) => (
+                                <div key={`emr-s-${idx}`} className="p-2 border rounded bg-gray-50 flex items-start justify-between">
+                                  <div>
+                                    <div className="font-medium">{es.service}</div>
+                                    <div className="text-xs text-gray-500">{es.category} • {es.quantity} • {es.date}</div>
+                                    {es.notes && <div className="text-xs text-gray-600 mt-1">{es.notes}</div>}
+                                  </div>
+                                  <div className="ml-3">
+                                    <Button size="sm" onClick={() => {
+                                      try {
+                                        const key = getInternalPatientKey(selectedPatient) || selectedPatient.patientId || selectedPatient.id || selectedPatient._id || getDisplayPatientId(selectedPatient);
+                                        const price = PriceListService.getPrice(es.service, es.category) || 0;
+                                        const item = { id: `emr-${es.serviceId}-${Date.now()}`, description: es.service, quantity: es.quantity || 1, rate: price, amount: (price * (es.quantity || 1)), category: es.category || 'Service' };
+                                        window.dispatchEvent(new CustomEvent('emr-add-to-invoice', { detail: { patientId: key, patientName: selectedPatient.name, item } }));
+                                        toast.success(`${es.service} added to invoice builder`);
+                                      } catch (e) { console.error(e); toast.error('Failed to add EMR item'); }
+                                    }}>Add</Button>
+                                  </div>
+                                </div>
+                              ));
+                            }
+                          } catch (e) {
+                            // ignore
+                          }
+                          return <div className="text-sm text-gray-500">No EMR services</div>;
+                        })()}
+                      </div>
+                    </div>
+
+                    <div>
+                      <p className="text-sm text-gray-500 mb-2">Medicines (Local / EMR)</p>
+                      <div className="space-y-2">
+                        {(selectedPatient.medicines || []).map((m: any, i: number) => (
+                          <div key={`local-m-${i}`} className="p-2 border rounded bg-white">
+                            <div className="font-medium">{m.name || m.description || 'Medicine'}</div>
+                            <div className="text-xs text-gray-500">{m.strength || ''} • Qty: {m.quantity} • {m.datePrescribed || m.date || ''}</div>
+                            {m.instructions && <div className="text-xs text-gray-600 mt-1">{m.instructions}</div>}
+                          </div>
+                        ))}
+
+                        {(() => {
+                          try {
+                            const emr = getEmrDataForPatient(selectedPatient);
+                            if (emr && Array.isArray((emr as any).medicines) && (emr as any).medicines.length > 0) {
+                              return (emr as any).medicines.map((med: any, idx: number) => (
+                                <div key={`emr-m-${idx}`} className="p-2 border rounded bg-gray-50 flex items-start justify-between">
+                                  <div>
+                                    <div className="font-medium">{med.name}</div>
+                                    <div className="text-xs text-gray-500">{med.strength || med.form || ''} • Qty: {med.quantity} • {med.datePrescribed || med.date}</div>
+                                    {med.instructions && <div className="text-xs text-gray-600 mt-1">{med.instructions}</div>}
+                                  </div>
+                                  <div className="ml-3">
+                                    <Button size="sm" onClick={() => {
+                                      try {
+                                        const key = getInternalPatientKey(selectedPatient) || selectedPatient.patientId || selectedPatient.id || selectedPatient._id || getDisplayPatientId(selectedPatient);
+                                        const price = PriceListService.getPrice(med.name || med.description || 'Medicine', 'Pharmacy') || 0;
+                                        const item = { id: `pharm-${med.medicineId || idx}-${Date.now()}`, description: `${med.name}${med.strength ? ` (${med.strength})` : ''}`, quantity: med.quantity || 1, rate: price, amount: (price * (med.quantity || 1)), category: 'Pharmacy' };
+                                        window.dispatchEvent(new CustomEvent('emr-add-to-invoice', { detail: { patientId: key, patientName: selectedPatient.name, item } }));
+                                        toast.success(`${med.name} added to invoice builder`);
+                                      } catch (e) { console.error(e); toast.error('Failed to add medicine'); }
+                                    }}>Add</Button>
+                                  </div>
+                                </div>
+                              ));
+                            }
+                          } catch (e) {}
+                          return <div className="text-sm text-gray-500">No EMR medicines</div>;
+                        })()}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-4 flex flex-col md:flex-row gap-4">
+                  <Button onClick={() => { setShowPatientDialog(false); handleEditPatient(selectedPatient); }} className="flex-1">
+                    <Edit className="mr-2 h-4 w-4" /> Edit Patient
+                  </Button>
+                  <Button variant="destructive" onClick={() => deletePatient(getInternalPatientKey(selectedPatient))} className="flex-1">
+                    <Trash2 className="mr-2 h-4 w-4" /> Delete Patient
+                  </Button>
+                </div>
               </div>
             </div>
-          )}
-        </DialogContent>
-      </Dialog>
+          </div>
+        )}
 
       {/* Add Patient Dialog */}
       <Dialog open={showAddPatientDialog} onOpenChange={setShowAddPatientDialog}>
-    <DialogContent className="w-[95vw] max-w-4xl p-6">
+  <DialogContent className="w-[95vw] max-w-[1200px] max-h-[85vh] p-4 md:p-6 overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="text-2xl font-semibold">
               {editingPatientId ? "Edit Patient" : "Add New Patient"}

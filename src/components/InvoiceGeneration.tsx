@@ -13,12 +13,14 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { MockEmrService } from "../services/mockEmrData";
 import { PriceListService } from "../services/priceListService";
-import { toast } from "sonner@2.0.3";
+import { toast } from "sonner";
 import axios from "axios";
 import { useEffect, useState } from "react";
 import { fetchPatients } from "../services/api.js";
+import { getDisplayPatientId, getInternalPatientKey, normalizePatients, resolvePatientDisplay } from "../utils/patientId";
 import { pharmacyService } from "../services/pharmacyIntegration";
 import { DiscountService, DiscountOption } from "../services/discountService";
+import { patientService } from "../services/patientService";
 
 interface InvoiceGenerationProps {
   onNavigateToView: (view: string) => void;
@@ -53,6 +55,11 @@ interface Invoice {
   taxableAmount?: number; // Amount subject to VAT (medicines only)
   tax?: number; // VAT on medicines
   exemptAmount?: number; // Amount exempt from VAT (medical services)
+  // Optional fields to support variable backend shapes
+  _id?: string;
+  accountId?: string;
+  invoiceNumber?: string;
+  patient?: any;
 }
 
 const HOSPITAL_SERVICES = {
@@ -91,132 +98,67 @@ const PREDEFINED_PATIENTS = [
   { id: "P012", name: "Francisco Ramos", fullDisplay: "Francisco Ramos (P012)" },
   { id: "P013", name: "Gabriela Santos", fullDisplay: "Gabriela Santos (P013)" },
   { id: "P014", name: "Antonio Fernandez", fullDisplay: "Antonio Fernandez (P014)" },
-  { id: "P015", name: "Valentina Castro", fullDisplay: "Valentina Castro (P015)" },
+  { id: "P015", name: "Valentina Castro", fullDisplay: "Valentina Castro (P015)" }
 ];
 
+const API_BASE = "http://localhost:5000/api";
+
 export function InvoiceGeneration({ onNavigateToView }: InvoiceGenerationProps) {
-  const [showCreateForm, setShowCreateForm] = useState(false);
-  const [selectedDiscount, setSelectedDiscount] = useState("");
-  const [customDiscountAmount, setCustomDiscountAmount] = useState("");
+  // Local component state (was accidentally removed in a previous edit)
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [invoiceItems, setInvoiceItems] = useState<InvoiceItem[]>([]);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
-  const [showInvoiceDetails, setShowInvoiceDetails] = useState(false);
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [showReceiptDialog, setShowReceiptDialog] = useState(false);
-  const [generatedInvoice, setGeneratedInvoice] = useState<Invoice | null>(null);
+  const [patients, setPatients] = useState<any[]>([]);
   const [openPatientCombobox, setOpenPatientCombobox] = useState(false);
   const [patientSearch, setPatientSearch] = useState("");
+  const [pharmacyTransactions, setPharmacyTransactions] = useState<any[]>([]);
+  const [selectedDiscount, setSelectedDiscount] = useState<string>("");
+  const [customDiscountAmount, setCustomDiscountAmount] = useState<string>("");
+  const [dynamicDiscounts, setDynamicDiscounts] = useState<DiscountOption[]>([]);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [showReceiptDialog, setShowReceiptDialog] = useState(false);
+  const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
+  const [generatedInvoice, setGeneratedInvoice] = useState<Invoice | null>(null);
+  const [showInvoiceDetails, setShowInvoiceDetails] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [invoiceToDelete, setInvoiceToDelete] = useState<string | null>(null);
-  
-  // Sample invoices with more comprehensive data
-  const [invoices, setInvoices] = useState<Invoice[]>([]);
-  const [patients, setPatients] = useState<any[]>([]);
-  const [pharmacyTransactions, setPharmacyTransactions] = useState<any[]>([]);
-  const [dynamicDiscounts, setDynamicDiscounts] = useState<DiscountOption[]>([]);
-  const API_BASE = "http://localhost:5000/api";
+  const [searchQuery, setSearchQuery] = useState("");
 
-  // Helper to compute age (years) from ISO date string
-  const calculateAge = (dob?: string | null) => {
-    if (!dob) return "-";
-    try {
-      const b = new Date(dob);
-      if (isNaN(b.getTime())) return "-";
-      const today = new Date();
-      let age = today.getFullYear() - b.getFullYear();
-      const m = today.getMonth() - b.getMonth();
-      if (m < 0 || (m === 0 && today.getDate() < b.getDate())) age--;
-      return age >= 0 ? age : "-";
-    } catch (e) {
-      return "-";
-    }
-  };
-
-  useEffect(() => {
-    // load invoices and patients in parallel
-    const load = async () => {
-      try {
-        await fetchInvoices();
-        const p = await fetchPatients();
-        setPatients(Array.isArray(p) ? p : []);
-      } catch (e) {
-        console.error("InvoiceGeneration load error", e);
-      }
-    };
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Listen for patient updates (created/updated by admin) and reload patients
-  useEffect(() => {
-    const handler = () => {
-      fetchPatients().then((p) => setPatients(Array.isArray(p) ? p : [])).catch((e) => console.error('Failed to refresh patients', e));
-    };
-    window.addEventListener('patients-updated', handler as EventListener);
-    return () => window.removeEventListener('patients-updated', handler as EventListener);
-  }, []);
-
-  // Load active discounts and listen for updates from discount management
-  useEffect(() => {
-    const loadDiscounts = () => {
-      try {
-        const list = DiscountService.getActiveDiscounts();
-        setDynamicDiscounts(list || []);
-      } catch (err) {
-        console.error('Failed to load discounts', err);
-      }
-    };
-
-    loadDiscounts();
-
-    const handler = () => loadDiscounts();
-    window.addEventListener('discounts-updated', handler as EventListener);
-    return () => window.removeEventListener('discounts-updated', handler as EventListener);
-  }, []);
-
+  // Fetch helper inside component so it can call setInvoices
   const fetchInvoices = async () => {
     try {
-      // fetch invoices + payments in parallel
+      // fetch invoices + payments in parallel (best-effort)
       const [invRes, payRes] = await Promise.all([
-        axios.get(`${API_BASE}/invoices`),
-        axios.get(`${API_BASE}/payments`)
+        axios.get(`${API_BASE}/invoices`).catch(() => ({ data: [] })),
+        axios.get(`${API_BASE}/payments`).catch(() => ({ data: [] }))
       ]);
 
-  const invPayload: any = invRes?.data;
-  const payPayload: any = payRes?.data;
+      const invPayload: any = invRes?.data;
+      const payPayload: any = payRes?.data;
 
       const paymentsArray: any[] = Array.isArray(payPayload)
         ? payPayload
-        : (payPayload?.success ? (payPayload.data || []) : []);
-
-      if (!invPayload) {
-        toast.error("Failed to load invoices");
-        return;
-      }
+        : (payPayload?.data || []);
 
       const invList: any[] = Array.isArray(invPayload)
         ? invPayload
-        : (invPayload?.success ? (invPayload.data || []) : []);
+        : (invPayload?.data || []);
 
       const normalized = invList.map((inv: any) => {
         const id = inv._id || inv.id;
         const number = inv.number || inv.invoiceNumber || `INV-${id?.toString().slice(-6) || Date.now()}`;
 
-        // detect matching payments by invoiceId or invoiceNumber
         const matchingPayment = paymentsArray.find((p: any) =>
           (p.invoiceId && id && String(p.invoiceId) === String(id)) ||
           (p.invoiceNumber && number && String(p.invoiceNumber) === String(number)) ||
           (p.invoiceNo && number && String(p.invoiceNo) === String(number))
         );
 
-        // prefer explicit invoice status from backend, otherwise derive from payments
         let status = (inv.status || inv.state || "").toString().toLowerCase();
         if (!status || status === "draft" || status === "unpaid") {
           if (matchingPayment) status = (matchingPayment.status || "paid").toString().toLowerCase();
         }
 
-        // normalize to component's accepted status values
         const finalStatus = status === "paid" || status === "completed" || status === "processed" ? "paid"
           : status === "sent" || status === "pending" ? "sent"
           : status === "overdue" ? "overdue"
@@ -250,6 +192,29 @@ export function InvoiceGeneration({ onNavigateToView }: InvoiceGenerationProps) 
     }
   };
 
+  // Load patients and admin-managed discounts once
+  useEffect(() => {
+    (async () => {
+      try {
+        const pRes = await fetchPatients();
+        const plist = Array.isArray(pRes) ? pRes : (pRes?.data || []);
+        setPatients(normalizePatients ? normalizePatients(plist) : plist);
+      } catch (err) {
+        console.warn('Failed to load patients', err);
+      }
+
+      try {
+        const dyn = DiscountService.getDiscounts?.() || [];
+        setDynamicDiscounts(dyn);
+      } catch (e) { /* ignore */ }
+    })();
+  }, []);
+
+  // Fetch invoices on mount so Recent Invoices list is populated
+  useEffect(() => {
+    fetchInvoices();
+  }, []);
+
   const [newInvoice, setNewInvoice] = useState({
     patientName: "",
     patientId: "",
@@ -258,6 +223,49 @@ export function InvoiceGeneration({ onNavigateToView }: InvoiceGenerationProps) 
   });
   
   const [selectedPatientId, setSelectedPatientId] = useState("");
+
+  // Listen for EMR items requested to be added to invoice (from admin or cashier)
+  useEffect(() => {
+    const handler = (ev: any) => {
+      try {
+        const detail = ev?.detail || {};
+        const items = Array.isArray(detail.items) ? detail.items : [];
+        const patientKey = detail.patientId || detail.patientKey || '';
+        if (!items || items.length === 0) return;
+
+        // Map incoming items to InvoiceItem shape
+        const mapped: InvoiceItem[] = items.map((it: any, idx: number) => {
+          const description = it.description || it.service || it.name || 'Item';
+          const qty = Number(it.quantity || it.qty || 1);
+          const rate = Number(it.rate || PriceListService.getPrice?.(description, it.category || it.group || 'Pharmacy') || 0);
+          return {
+            id: it.id || `emr-${Date.now()}-${idx}`,
+            description,
+            quantity: qty,
+            rate,
+            amount: qty * rate,
+            category: it.category || 'Pharmacy'
+          } as InvoiceItem;
+        });
+
+        // Prepend to current invoice items and open the create form
+        setInvoiceItems(prev => [...mapped, ...prev]);
+        if (patientKey) {
+          setSelectedPatientId(patientKey);
+          const found = patients.find((p:any) => getInternalPatientKey(p) === patientKey || p.id === patientKey || p._id === patientKey || p.patientId === patientKey);
+          if (found) setNewInvoice(prev => ({ ...prev, patientName: found.name || prev.patientName, patientId: getInternalPatientKey(found) || patientKey }));
+        }
+        setShowCreateForm(true);
+        toast.success(`Added ${mapped.length} item(s) to invoice draft`);
+      } catch (e) {
+        console.error('emr-add-to-invoice handler error', e);
+        toast.error('Failed to add items to invoice');
+      }
+    };
+
+    window.addEventListener('emr-add-to-invoice', handler as EventListener);
+    return () => window.removeEventListener('emr-add-to-invoice', handler as EventListener);
+  }, [patients]);
 
   const [currentItem, setCurrentItem] = useState({
     description: "",
@@ -387,6 +395,21 @@ export function InvoiceGeneration({ onNavigateToView }: InvoiceGenerationProps) 
     }
   };
 
+  // Safe date helpers to avoid showing 'Invalid Date'
+  const formatDate = (dateLike?: string | Date | null) => {
+    if (!dateLike) return "-";
+    const d = new Date(dateLike as any);
+    if (isNaN(d.getTime())) return "-";
+    return d.toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' });
+  };
+
+  const formatDateTime = (dateLike?: string | Date | null) => {
+    if (!dateLike) return "-";
+    const d = new Date(dateLike as any);
+    if (isNaN(d.getTime())) return "-";
+    return d.toLocaleString('en-PH', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  };
+
 const handleGenerateInvoice = async () => {
   if (invoiceItems.length === 0) {
     toast.error('Please add at least one service item.');
@@ -434,16 +457,24 @@ const handleGenerateInvoice = async () => {
 
       // attach patient details from loaded patients if available (helps receipt display)
       const patientObj = patients.find((p:any) => {
-        const pid = p.id || p._id || p.patientId;
-        return pid && String(pid) === String(saved.patientId);
+        const key = getInternalPatientKey(p);
+        return key && String(key) === String(saved.patientId);
       });
-      if (patientObj) saved.patient = patientObj;
+      if (patientObj) {
+        saved.patient = patientObj;
+        // prefer human-friendly patient id for UI display (e.g., P001)
+        saved.patientId = getDisplayPatientId(patientObj) || saved.patientId;
+      }
 
-      setInvoices((prev) => [saved as Invoice, ...prev]);
+  setInvoices((prev) => [saved as Invoice, ...prev]);
 
-      setShowReceiptDialog(true);
-      setGeneratedInvoice(saved as Invoice & { patient?: any });
-      setShowCreateForm(false);
+  // Open the unified invoice details container so generated invoice
+  // and viewed invoice use the same modal/container
+  setSelectedInvoice(saved as Invoice & { patient?: any });
+  setGeneratedInvoice(saved as Invoice & { patient?: any });
+  setShowInvoiceDetails(true);
+  setShowReceiptDialog(false);
+  setShowCreateForm(false);
     } else {
       toast.error("Failed to save invoice");
     }
@@ -468,7 +499,7 @@ const handleGenerateInvoice = async () => {
       const pid = p.id || p._id || p.patientId;
       return pid && String(pid) === String(generatedInvoice?.patientId);
     });
-    const printAge = patientForPrint ? calculateAge(patientForPrint.dateOfBirth) : (generatedInvoice?.date ? calculateAge(generatedInvoice.date) : "-");
+  const printAge = patientForPrint ? patientService.calculateAge(patientForPrint.dateOfBirth) : (generatedInvoice?.date ? patientService.calculateAge(generatedInvoice.date) : "-");
     const printSex = (patientForPrint && (patientForPrint.sex || 'Unknown')) || (generatedInvoice as any)?.sex || 'Unknown';
 
     printWindow.document.write(`
@@ -655,6 +686,8 @@ const handleGenerateInvoice = async () => {
 
   const handleViewInvoice = (invoice: Invoice) => {
     setSelectedInvoice(invoice);
+    // also set generatedInvoice so print and shared container behavior remain consistent
+    setGeneratedInvoice(invoice);
     setShowInvoiceDetails(true);
   };
 
@@ -750,27 +783,28 @@ const confirmDeleteInvoice = async () => {
                         <CommandEmpty>No patient found.</CommandEmpty>
                         <CommandGroup>
                           {patients.filter((p:any) => {
-                                const q = (patientSearch || "").toLowerCase();
-                                const pid = (p.id || p._id || p.patientId || "").toString().toLowerCase();
-                                const name = (p.name || "").toLowerCase();
-                                return q === "" || name.includes(q) || pid.includes(q);
-                              }).map((patient:any) => {
-                                const pid = patient.id || patient._id || patient.patientId;
-                                const hasEmrData = MockEmrService.hasUnbilledServices(pid);
-                                const emrData = MockEmrService.getPatientEmrData(pid);
-                                const display = `${patient.name} (${pid})`;
-                                return (
-                                  <CommandItem
-                                    key={pid}
-                                    value={display}
-                                    onSelect={async () => {
-                                    const selId = pid;
-                                    setSelectedPatientId(selId);
-                                    setNewInvoice({
-                                      ...newInvoice, 
-                                      patientName: patient.name,
-                                      patientId: selId
-                                    });
+                                  const q = (patientSearch || "").toLowerCase();
+                                                  const pid = (getDisplayPatientId(p) || "").toString().toLowerCase();
+                                  const name = (p.name || "").toLowerCase();
+                                  return q === "" || name.includes(q) || pid.includes(q);
+                                                }).map((patient:any) => {
+                                                  const internalKey = getInternalPatientKey(patient);
+                                                  const displayPid = getDisplayPatientId(patient) || internalKey;
+                                                  const hasEmrData = MockEmrService.hasUnbilledServices(internalKey);
+                                                  const emrData = MockEmrService.getPatientEmrData(internalKey);
+                                                  const display = `${patient.name} (${displayPid})`;
+                                  return (
+                                    <CommandItem
+                                                      key={display}
+                                                      value={display}
+                                      onSelect={async () => {
+                                                      const selId = internalKey;
+                                      setSelectedPatientId(selId);
+                                      setNewInvoice({
+                                        ...newInvoice, 
+                                        patientName: patient.name,
+                                        patientId: selId
+                                      });
 
                                     // Auto-populate services from EMR
                                     const emrServices = MockEmrService.getPatientServices(selId);
@@ -838,7 +872,7 @@ const confirmDeleteInvoice = async () => {
                                 >
                                   <Check
                                     className={`mr-2 h-4 w-4 ${
-                                      selectedPatientId === pid ? "opacity-100" : "opacity-0"
+                                      selectedPatientId === internalKey ? "opacity-100" : "opacity-0"
                                     }`}
                                   />
                                   <div className="flex-1">
@@ -1246,7 +1280,8 @@ const confirmDeleteInvoice = async () => {
 
       {/* Receipt Dialog */}
       <Dialog open={showReceiptDialog} onOpenChange={setShowReceiptDialog}>
-        <DialogContent className="max-w-full w-[96vw] max-h-[96vh] overflow-y-auto receipt-dialog p-6">
+  {/* Tight compact receipt dialog to match compact design */}
+  <DialogContent className="max-w-[420px] w-[420px] max-h-[85vh] overflow-auto receipt-dialog p-4 text-sm">
           <DialogHeader>
             <DialogTitle className="flex items-center justify-between">
               <span>Invoice Receipt</span>
@@ -1266,114 +1301,115 @@ const confirmDeleteInvoice = async () => {
           </DialogHeader>
 
           {generatedInvoice && (
-            <div id="invoice-receipt-print" className="space-y-6 print:p-8">
+            <div className="flex flex-col">
+              <div id="invoice-receipt-print" className="space-y-2 print:p-1 text-sm overflow-y-auto max-h-[60vh]">
               {/* Hospital Header */}
-              <div className="text-center border-b pb-4">
+              <div className="text-center border-b pb-2">
                 <h2 className="text-2xl font-bold text-[#358E83]">MediCare Hospital</h2>
-                <p className="text-sm text-gray-600">123 Health Street, Medical District, Philippines</p>
-                <p className="text-sm text-gray-600">Tel: (02) 1234-5678 | Email: billing@medicare.ph</p>
+                <p className="text-xs text-gray-600">123 Health Street, Medical District</p>
+                <p className="text-xs text-gray-600">Tel: (02) 1234-5678</p>
               </div>
 
               {/* Invoice Details */}
-              <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-2 gap-2 text-sm">
                 <div>
-                  <p className="text-sm text-gray-600">Invoice Number:</p>
-                  <p className="font-semibold">{generatedInvoice.number}</p>
+                  <p className="text-xs text-gray-600">Invoice Number:</p>
+                  <p className="font-semibold text-sm">{generatedInvoice.number}</p>
                 </div>
                 <div>
-                  <p className="text-sm text-gray-600">Date Issued:</p>
-                  <p className="font-semibold">{new Date(generatedInvoice.date).toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' })}</p>
+                  <p className="text-xs text-gray-600">Date Issued:</p>
+                  <p className="font-semibold text-sm">{formatDate(generatedInvoice.date)}</p>
                 </div>
                 <div>
-                  <p className="text-sm text-gray-600">Patient Name:</p>
-                  <p className="font-semibold">{generatedInvoice.patientName}</p>
+                  <p className="text-xs text-gray-600">Patient Name:</p>
+                  <p className="font-semibold text-sm">{generatedInvoice.patientName}</p>
                 </div>
                 <div>
-                  <p className="text-sm text-gray-600">Patient ID:</p>
-                  <p className="font-semibold">{generatedInvoice.patientId}</p>
+                  <p className="text-xs text-gray-600">Patient ID:</p>
+                  <p className="font-semibold text-sm">{resolvePatientDisplay(patients, generatedInvoice.patientId || generatedInvoice.id || generatedInvoice._id)}</p>
                 </div>
                 <div>
-                  <p className="text-sm text-gray-600">Payment Terms:</p>
-                  <p className="font-semibold">
-                    {new Date(generatedInvoice.dueDate).toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' })}
+                  <p className="text-xs text-gray-600">Payment Terms:</p>
+                  <p className="font-semibold text-sm">
+                    {formatDate(generatedInvoice.dueDate)}
                     {generatedInvoice.dueDate === generatedInvoice.date && (
                       <span className="text-xs text-orange-600 ml-2">(Due Immediately)</span>
                     )}
                   </p>
                 </div>
                 <div>
-                  <p className="text-sm text-gray-600">Status:</p>
+                  <p className="text-xs text-gray-600">Status:</p>
                   <Badge className={getStatusColor(generatedInvoice.status)}>
-                    {generatedInvoice.status.toUpperCase()}
+                    <span className="text-[11px]">{generatedInvoice.status.toUpperCase()}</span>
                   </Badge>
                 </div>
               </div>
 
               {/* Services Table */}
               <div>
-                <h3 className="font-semibold mb-2">Services Rendered</h3>
-                <table className="w-full border">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="px-4 py-2 text-left border-b">Description</th>
-                      <th className="px-4 py-2 text-center border-b">Qty</th>
-                      <th className="px-4 py-2 text-right border-b">Rate</th>
-                      <th className="px-4 py-2 text-right border-b">Amount</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {generatedInvoice?.items?.map((item) => (
-                      <tr key={item.id} className="border-b">
-                        <td className="px-4 py-2">
-                          <div>{item.description}</div>
-                          <div className="text-xs text-gray-500">{item.category}</div>
-                        </td>
-                        <td className="px-4 py-2 text-center">{item.quantity}</td>
-                        <td className="px-4 py-2 text-right">₱{item.rate.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                        <td className="px-4 py-2 text-right">₱{item.amount.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                <h3 className="font-semibold mb-1">Services Rendered</h3>
+                <div className="max-h-[160px] overflow-y-auto border rounded">
+                  <table className="w-full">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-2 py-2 text-left text-[12px]">Description</th>
+                        <th className="px-2 py-2 text-center text-[12px]">Qty</th>
+                        <th className="px-2 py-2 text-right text-[12px]">Rate</th>
+                        <th className="px-2 py-2 text-right text-[12px]">Amount</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {generatedInvoice?.items?.map((item) => (
+                        <tr key={item.id} className="border-t">
+                          <td className="px-2 py-2 align-top">
+                            <div className="text-xs">{item.description}</div>
+                            <div className="text-[11px] text-gray-500">{item.category}</div>
+                          </td>
+                          <td className="px-2 py-2 text-center align-top">{item.quantity}</td>
+                          <td className="px-2 py-2 text-right align-top">₱{item.rate.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                          <td className="px-2 py-2 text-right align-top">₱{item.amount.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
 
               {/* Totals Section - Enhanced */}
-              <div className="border-t pt-4">
+              <div className="border-t pt-3">
                 <div className="flex justify-end">
-                  <div className="w-96 space-y-2">
+                  <div className="w-48 space-y-1 text-sm">
                     <div className="flex justify-between">
                       <span>Subtotal:</span>
-                      <span>₱{generatedInvoice.subtotal.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                      <span>₱{(generatedInvoice.subtotal || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                     </div>
-                    
-                    {generatedInvoice.discount > 0 && (
-                      <>
-                        <div className="flex justify-between text-green-600">
-                          <span>
-                            Discount - {generatedInvoice.discountType}
-                            {generatedInvoice.discountPercentage && generatedInvoice.discountPercentage > 0 && (
-                              <span className="text-xs ml-1">({generatedInvoice.discountPercentage}%)</span>
-                            )}:
-                          </span>
-                          <span>-₱{generatedInvoice.discount.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                        </div>
-                      </>
+
+                    {generatedInvoice.discount && generatedInvoice.discount > 0 && (
+                      <div className="flex justify-between text-green-600">
+                        <span>
+                          Discount - {generatedInvoice.discountType}
+                          {generatedInvoice.discountPercentage && generatedInvoice.discountPercentage > 0 && (
+                            <span className="text-xs ml-1">({generatedInvoice.discountPercentage}%)</span>
+                          )}:
+                        </span>
+                        <span>-₱{generatedInvoice.discount.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                      </div>
                     )}
-                    
+
                     {generatedInvoice.tax && generatedInvoice.tax > 0 && (
                       <div className="flex justify-between text-blue-600 text-sm">
                         <span>
                           VAT on Medicines (12%):
-                          <span className="text-xs ml-1">(₱{generatedInvoice.taxableAmount?.toLocaleString('en-PH', { minimumFractionDigits: 2 }) || '0.00'})</span>
+                          <span className="text-xs ml-1">(₱{(generatedInvoice.taxableAmount || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })})</span>
                         </span>
                         <span>₱{generatedInvoice.tax.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                       </div>
                     )}
                     
-                    <div className="border-t my-2"></div>
+                    <div className="border-t my-1"></div>
                     
-                    <div className="flex justify-between font-bold text-lg">
-                      <span>Total Amount Due:</span>
+                    <div className="flex justify-between font-semibold text-sm">
+                      <span>Total:</span>
                       <span>₱{generatedInvoice.total.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                     </div>
                   </div>
@@ -1382,7 +1418,7 @@ const confirmDeleteInvoice = async () => {
               
               {/* Transaction Information */}
               {(generatedInvoice.notes || generatedInvoice.generatedBy) && (
-                <div className="border-t pt-4 space-y-3">
+                <div className="border-t pt-3 space-y-2">
                   {generatedInvoice.notes && (
                     <div>
                       <p className="text-sm text-gray-600 font-semibold">Notes:</p>
@@ -1390,52 +1426,68 @@ const confirmDeleteInvoice = async () => {
                     </div>
                   )}
                   
-                  <div className="grid grid-cols-2 gap-4 text-sm">
-                    {generatedInvoice.generatedBy && (
-                      <div>
-                        <p className="text-gray-600">Generated By:</p>
-                        <p className="font-semibold">{generatedInvoice.generatedBy}</p>
-                      </div>
-                    )}
-                    {generatedInvoice.generatedAt && (
-                      <div>
-                        <p className="text-gray-600">Generated At:</p>
-                        <p className="font-semibold">
-                          {new Date(generatedInvoice.generatedAt).toLocaleString('en-PH', { 
-                            year: 'numeric', 
-                            month: 'short', 
-                            day: 'numeric', 
-                            hour: '2-digit', 
-                            minute: '2-digit' 
-                          })}
-                        </p>
-                      </div>
-                    )}
+                  <div className="flex justify-between text-sm">
+                    <div>
+                      <p className="text-gray-600">Generated By:</p>
+                      <p className="font-semibold text-sm">{generatedInvoice.generatedBy}</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-600">Generated At:</p>
+                      <p className="font-semibold text-sm">{formatDateTime(generatedInvoice.generatedAt)}</p>
+                    </div>
                   </div>
                 </div>
               )}
 
               {/* Footer */}
-              <div className="text-center text-sm text-gray-600 border-t pt-4">
-                <p>Thank you for choosing MediCare Hospital!</p>
-                <p className="mt-2">For inquiries, please contact our billing department.</p>
-                <p className="mt-4">Generated on {new Date().toLocaleString('en-PH', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
+              <div className="text-center text-xs text-gray-600 border-t pt-1">
+                <p>Thank you for choosing MediCare Hospital</p>
+              </div>
+              </div>
+
+              {/* Action buttons (non-sticky) */}
+              <div className="mt-4 pt-2 border-t print:hidden">
+                <div className="flex justify-end space-x-2">
+                  <Button variant="outline" size="sm" onClick={() => setShowReceiptDialog(false)}>
+                    Close
+                  </Button>
+
+                  <Button
+                    size="sm"
+                    className="bg-[#358E83] hover:bg-[#358E83]/90 text-white"
+                    onClick={() => {
+                      try {
+                        const selId = (generatedInvoice && (generatedInvoice.id || generatedInvoice._id)) || '';
+                        const selNumber = (generatedInvoice && (generatedInvoice.number || generatedInvoice.invoiceNumber)) || '';
+                        if (selId) window.localStorage.setItem('selectedInvoiceForProcessing', String(selId));
+                        if (selNumber) window.localStorage.setItem('selectedInvoiceForProcessingNumber', String(selNumber));
+                        // dispatch an event as a fallback for consumers that listen for navigation
+                        try { window.dispatchEvent(new CustomEvent('navigate-to', { detail: { view: 'payment', invoiceId: selId, invoiceNumber: selNumber } })); } catch (e) {}
+                      } catch (e) { /* ignore */ }
+                      // primary navigation callback
+                      if (onNavigateToView) onNavigateToView('payment');
+                      else {
+                        // fallback: attempt history push (best-effort SPA navigation)
+                        try { window.history.pushState({}, '', '/payment-processing'); window.dispatchEvent(new PopStateEvent('popstate')); } catch (e) {}
+                      }
+                    }}
+                  >
+                    <CreditCard className="mr-2 h-4 w-4" />
+                    Process
+                  </Button>
+
+                  <Button
+                    size="sm"
+                    className="bg-[#E94D61] hover:bg-[#E94D61]/90 text-white"
+                    onClick={handlePrintReceipt}
+                  >
+                    <Printer className="mr-2 h-4 w-4" />
+                    Print
+                  </Button>
+                </div>
               </div>
             </div>
           )}
-
-          <div className="flex justify-end space-x-3 print:hidden">
-            <Button variant="outline" onClick={() => setShowReceiptDialog(false)}>
-              Close
-            </Button>
-            <Button
-              className="bg-[#E94D61] hover:bg-[#E94D61]/90 text-white"
-              onClick={handlePrintReceipt}
-            >
-              <Printer className="mr-2 h-4 w-4" />
-              Print
-            </Button>
-          </div>
         </DialogContent>
       </Dialog>
 
@@ -1476,7 +1528,7 @@ const confirmDeleteInvoice = async () => {
                           <div>
                             <p className="font-semibold">{invoice.number}</p>
                             <p className="text-sm text-gray-600">
-                              {invoice.patientName} ({invoice.patientId})
+                              {resolvePatientDisplay(patients, invoice.patientId || invoice.accountId || invoice.patient)}
                             </p>
                           </div>
                         </div>
@@ -1531,15 +1583,48 @@ const confirmDeleteInvoice = async () => {
 
       {/* Invoice Details Dialog */}
       <Dialog open={showInvoiceDetails} onOpenChange={setShowInvoiceDetails}>
-        <DialogContent className="max-w-2xl">
+    <DialogContent className="max-w-[420px] w-[420px] max-h-[85vh] overflow-auto receipt-dialog p-4 text-sm">
           <DialogHeader>
-            <DialogTitle>Invoice Details</DialogTitle>
+            <DialogTitle className="flex items-center justify-between">
+              <span>Invoice Details</span>
+              <div className="flex items-center space-x-2">
+                  <Button
+                  size="sm"
+                  className="bg-[#358E83] hover:bg-[#358E83]/90 text-white"
+                  onClick={() => {
+                    try {
+                      const selId = (generatedInvoice && (generatedInvoice.id || generatedInvoice._id)) || '';
+                      const selNumber = (generatedInvoice && (generatedInvoice.number || generatedInvoice.invoiceNumber)) || '';
+                      if (selId) window.localStorage.setItem('selectedInvoiceForProcessing', String(selId));
+                      if (selNumber) window.localStorage.setItem('selectedInvoiceForProcessingNumber', String(selNumber));
+                      try { window.dispatchEvent(new CustomEvent('navigate-to', { detail: { view: 'payment', invoiceId: selId, invoiceNumber: selNumber } })); } catch (e) {}
+                    } catch (e) { /* ignore */ }
+                    if (onNavigateToView) onNavigateToView('payment');
+                    else {
+                      try { window.history.pushState({}, '', '/payment'); window.dispatchEvent(new PopStateEvent('popstate')); } catch (e) {}
+                    }
+                  }}
+                >
+                  <CreditCard className="mr-2 h-4 w-4" />
+                  Process
+                </Button>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handlePrintReceipt}
+                >
+                  <Printer className="mr-2 h-4 w-4" />
+                  Print
+                </Button>
+              </div>
+            </DialogTitle>
             <DialogDescription>
               View complete invoice information and services
             </DialogDescription>
           </DialogHeader>
           {selectedInvoice && (
-            <div className="space-y-4">
+            <div id="invoice-receipt-print" className="space-y-4 text-sm">
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <p className="text-sm text-gray-600">Invoice Number</p>
@@ -1547,15 +1632,15 @@ const confirmDeleteInvoice = async () => {
                 </div>
                 <div>
                   <p className="text-sm text-gray-600">Patient</p>
-                  <p className="font-semibold">{selectedInvoice.patientName} ({selectedInvoice.patientId})</p>
+                  <p className="font-semibold">{resolvePatientDisplay(patients, selectedInvoice.patientId || selectedInvoice.accountId || selectedInvoice.patient)}</p>
                 </div>
                 <div>
                   <p className="text-sm text-gray-600">Date</p>
-                  <p>{new Date(selectedInvoice.date).toLocaleDateString()}</p>
+                  <p>{formatDate(selectedInvoice.date)}</p>
                 </div>
                 <div>
                   <p className="text-sm text-gray-600">Due Date</p>
-                  <p>{new Date(selectedInvoice.dueDate).toLocaleDateString()}</p>
+                  <p>{formatDate(selectedInvoice.dueDate)}</p>
                 </div>
               </div>
 
@@ -1590,12 +1675,14 @@ const confirmDeleteInvoice = async () => {
               <div className="bg-gray-50 p-4 rounded-lg space-y-2">
                 <div className="flex justify-between">
                   <span>Subtotal:</span>
-                  <span>₱{selectedInvoice.subtotal.toLocaleString()}</span>
+                  <span>₱{(selectedInvoice.subtotal || 0).toLocaleString()}</span>
                 </div>
-                <div className="flex justify-between text-green-600">
-                  <span>Discount:</span>
-                  <span>-₱{selectedInvoice.discount.toLocaleString()}</span>
-                </div>
+                {selectedInvoice.discount && (
+                  <div className="flex justify-between text-green-600">
+                    <span>Discount:</span>
+                    <span>-₱{selectedInvoice.discount.toLocaleString()}</span>
+                  </div>
+                )}
                 {selectedInvoice.tax && selectedInvoice.tax > 0 && (
                   <div className="flex justify-between text-blue-600">
                     <span>VAT on Medicines (12%):</span>

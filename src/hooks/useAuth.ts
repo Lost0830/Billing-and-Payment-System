@@ -73,7 +73,7 @@ export function useAuth() {
     });
 
     // Show success notification
-    import("sonner@2.0.3").then(({ toast }) => {
+    import("sonner").then(({ toast }) => {
       toast.success(`Welcome to ${credentials.system.toUpperCase()}! Signed in as ${detectedRole}.`);
     });
 
@@ -85,7 +85,7 @@ export function useAuth() {
     setUserSession(null);
     
     // Show logout notification
-    import("sonner@2.0.3").then(({ toast }) => {
+    import("sonner").then(({ toast }) => {
       toast.success("Successfully signed out. Redirected to landing page.");
     });
 

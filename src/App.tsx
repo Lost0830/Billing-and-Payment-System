@@ -62,6 +62,14 @@ export default function App() {
       handleLogout();
       return;
     }
+    // Allow explicit navigation to the main dashboard (Back to HIMS)
+    // even when the userSession.system would normally restrict navigation.
+    if (view === "dashboard") {
+      // Call navigateToView without a userSession so it sets the global dashboard view
+      navigateToView("dashboard", null);
+      return;
+    }
+
     navigateToView(view, userSession);
   };
 

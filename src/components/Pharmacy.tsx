@@ -13,7 +13,7 @@ import {
   Package
 } from "lucide-react";
 import { integrationManager } from "../services/integrationManager";
-import { toast } from "sonner@2.0.3";
+import { toast } from "sonner";
 
 interface PharmacyProps {
   onNavigateToView: (view: string) => void;

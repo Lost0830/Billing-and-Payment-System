@@ -17,7 +17,10 @@ const PatientSchema = new mongoose.Schema({
   medicines: { type: Array, default: [] },
   createdBy: String,
   createdByRole: String,
-  createdAt: { type: Date, default: Date.now }
+  createdAt: { type: Date, default: Date.now },
+  isArchived: { type: Boolean, default: false },
+  archivedAt: { type: Date },
+  archivedBy: { type: String }
 });
 
 export default mongoose.models.Patient || mongoose.model("Patient", PatientSchema);

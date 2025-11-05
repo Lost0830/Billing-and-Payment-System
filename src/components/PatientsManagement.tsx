@@ -254,23 +254,37 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
   };
 
   // Delete -> DELETE /api/patients/:id (keep as-is but ensure it updates state)
-  const deletePatient = async (id: string) => {
+  // Archive (soft-delete) flow: open dialog and call archive endpoint
+  const [archiveDialogOpen, setArchiveDialogOpen] = useState(false);
+  const [archiveTarget, setArchiveTarget] = useState<string | null>(null);
+
+  const confirmArchivePatient = (id: string) => {
+    setArchiveTarget(id);
+    setArchiveDialogOpen(true);
+  };
+
+  const performArchive = async (id: string | null) => {
+    if (!id) return;
     try {
-      if (!window.confirm("Delete this patient? This cannot be undone.")) return;
-      const res = await fetch(`${API_URL}/patients/${id}`, { method: "DELETE" });
-      const body = await res.json();
-      console.log("deletePatient response:", res.status, body);
-      if (!res.ok || !body.success) throw new Error(body?.message || "Delete failed");
-      setPatients((prev: any[]) => prev.filter(p => p.id !== id && p._id !== id && p.patientId !== id));
-      toast.success("Patient deleted");
-      try {
-        window.dispatchEvent(new CustomEvent('patients-updated', { detail: { action: 'delete', id } }));
-      } catch (e) {
-        console.warn('Could not dispatch patients-updated event', e);
+      const res = await fetch(`${API_URL}/patients/${id}/archive`, { method: "POST", headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ archivedBy: userSession?.name || 'system' }) });
+      const text = await res.text();
+      const contentType = (res.headers.get('content-type') || '').toLowerCase();
+      let body: any = {};
+      if (contentType.includes('application/json') && text) {
+        try { body = JSON.parse(text); } catch (e) { /* ignore */ }
       }
-    } catch (e) {
-      console.error("deletePatient error", e);
-      toast.error("Failed to delete patient");
+      if (!res.ok) throw new Error(body?.message || text || `Server returned ${res.status}`);
+
+      // remove from local state
+      setPatients(prev => prev.filter(p => p.id !== id && p._id !== id && p.patientId !== id));
+      toast.success(body?.message || 'Patient moved to archive');
+      try { window.dispatchEvent(new CustomEvent('patients-updated', { detail: { action: 'archive', id } })); } catch (e) { /* ignore */ }
+    } catch (err: any) {
+      console.error('performArchive error', err);
+      toast.error(err?.message || 'Failed to move patient to archive');
+    } finally {
+      setArchiveDialogOpen(false);
+      setArchiveTarget(null);
     }
   };
 
@@ -431,7 +445,6 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
       return "-";
     }
   };
-
   return (
     <div>
       {/* Header */}
@@ -628,14 +641,19 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
                           <Eye className="h-4 w-4 mr-2" />
                           View Details
                         </Button>
-                        <div className="flex gap-2 mt-2">
-                          <Button variant="ghost" size="sm" onClick={() => handleEditPatient(patient)}>
-                            <Edit className="h-4 w-4 mr-2" /> Edit
-                          </Button>
-                          <Button variant="destructive" size="sm" onClick={() => deletePatient(getInternalPatientKey(patient))}>
-                            <Trash2 className="h-4 w-4 mr-2" /> Delete
-                          </Button>
-                        </div>
+                        {/* Edit and Archive actions are admin-only on cashier/limited roles */}
+                        {userSession?.role && userSession.role.toString().toLowerCase() !== 'cashier' ? (
+                          <div className="flex gap-2 mt-2">
+                            <Button variant="ghost" size="sm" onClick={() => handleEditPatient(patient)}>
+                              <Edit className="h-4 w-4 mr-2" /> Edit
+                            </Button>
+                            <Button variant="destructive" size="sm" onClick={() => confirmArchivePatient(getInternalPatientKey(patient))}>
+                              <Trash2 className="h-4 w-4 mr-2" /> Move to Archive
+                            </Button>
+                          </div>
+                        ) : (
+                          <div className="text-sm text-gray-500 mt-2">Edit / Archive (Admin only)</div>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -835,12 +853,18 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
                 </div>
 
                 <div className="mt-4 flex flex-col md:flex-row gap-4">
-                  <Button onClick={() => { setShowPatientDialog(false); handleEditPatient(selectedPatient); }} className="flex-1">
-                    <Edit className="mr-2 h-4 w-4" /> Edit Patient
-                  </Button>
-                  <Button variant="destructive" onClick={() => deletePatient(getInternalPatientKey(selectedPatient))} className="flex-1">
-                    <Trash2 className="mr-2 h-4 w-4" /> Delete Patient
-                  </Button>
+                  {userSession?.role && userSession.role.toString().toLowerCase() !== 'cashier' ? (
+                    <>
+                      <Button onClick={() => { setShowPatientDialog(false); handleEditPatient(selectedPatient); }} className="flex-1">
+                        <Edit className="mr-2 h-4 w-4" /> Edit Patient
+                      </Button>
+                      <Button variant="destructive" onClick={() => confirmArchivePatient(getInternalPatientKey(selectedPatient))} className="flex-1">
+                        <Trash2 className="mr-2 h-4 w-4" /> Move to Archive
+                      </Button>
+                    </>
+                  ) : (
+                    <div className="text-sm text-gray-500">Editing and archiving patient records requires admin privileges.</div>
+                  )}
                 </div>
               </div>
             </div>
@@ -848,6 +872,28 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
         )}
 
       {/* Add Patient Dialog */}
+      {/* Archive Confirmation Dialog */}
+      <Dialog open={archiveDialogOpen} onOpenChange={setArchiveDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Move Patient to Archive?</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to move this patient to the archive? You can restore the patient later from the Archive.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="text-sm text-gray-700">
+              <div className="font-medium">This action will hide the patient from active lists.</div>
+            </div>
+            <div className="flex justify-end space-x-2 pt-4">
+              <Button variant="outline" onClick={() => setArchiveDialogOpen(false)}>Cancel</Button>
+              <Button className="bg-red-600 hover:bg-red-700" onClick={() => performArchive(archiveTarget)}>
+                Move to Archive
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
       <Dialog open={showAddPatientDialog} onOpenChange={setShowAddPatientDialog}>
   <DialogContent className="w-[95vw] max-w-[1200px] max-h-[85vh] p-4 md:p-6 overflow-y-auto">
           <DialogHeader>

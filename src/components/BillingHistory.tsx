@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { History, Search, Filter, Download, Eye, Calendar, User, Receipt, CreditCard, Pill, FileText, Activity, Stethoscope, Printer } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -8,9 +8,12 @@ import { Badge } from "./ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "./ui/dialog";
 import { pharmacyService, PharmacyTransaction } from "../services/pharmacyIntegration";
+import { toast } from "sonner";
 import { billingService, BillingRecord as ServiceBillingRecord } from "../services/billingService";
+import { fetchInvoices, fetchPayments } from "../services/api.js";
 import { patientService } from "../services/patientService";
 import { getDisplayPatientId, getInternalPatientKey, resolvePatientDisplay } from "../utils/patientId";
+import { useAuth } from "../hooks/useAuth";
 
 
 interface BillingHistoryProps {
@@ -49,6 +52,8 @@ interface BillingRecord {
 export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
   const [selectedFilter, setSelectedFilter] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
+  const { userSession } = useAuth();
+  const isAdmin = userSession?.role === 'admin';
   const [patients, setPatients] = useState<Array<{id: string, name: string, fullDisplay: string}>>([]);
   
   // Load patients from patientService on component mount
@@ -70,17 +75,183 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
   const [isLoadingPharmacy, setIsLoadingPharmacy] = useState(false);
   const [pharmacyIntegrationEnabled, setPharmacyIntegrationEnabled] = useState(false);
   const [billingRecords, setBillingRecords] = useState<BillingRecord[]>([]);
+  const [suppressRemoteSync, setSuppressRemoteSync] = useState(billingService.isRemoteSyncSuppressed ? billingService.isRemoteSyncSuppressed() : false);
+  const suppressRemoteRef = useRef<boolean>(suppressRemoteSync);
+  const [chartRange, setChartRange] = useState<'today'|'monthly'|'yearly'>('today');
+  const [chartSeries, setChartSeries] = useState<number[]>([]);
+  const [chartLabels, setChartLabels] = useState<string[]>([]);
   const [showDetailsDialog, setShowDetailsDialog] = useState(false);
   const [selectedRecord, setSelectedRecord] = useState<BillingRecord | null>(null);
+  const [showClearDialog, setShowClearDialog] = useState(false);
   
   // Subscribe to billing service for real-time updates
   useEffect(() => {
     const unsubscribe = billingService.subscribe((records) => {
+      // keep local billingService records; we'll merge with remote data below
       setBillingRecords(records as BillingRecord[]);
     });
     
     return () => unsubscribe();
   }, []);
+
+  // Load remote invoices/payments and merge with local billingService records
+  // make loadRemote reusable so other components/listeners can trigger a full sync
+  const loadRemote = async () => {
+    // Check the global suppression state stored in billingService as well as the ref
+    if (suppressRemoteRef.current || billingService.isRemoteSyncSuppressed()) {
+      // when suppressed we intentionally avoid fetching server records so the UI remains cleared
+      return;
+    }
+    try {
+      const [invoices, payments] = await Promise.all([fetchInvoices().catch(() => []), fetchPayments().catch(() => [])]);
+
+      // Map invoices
+      const invRecords: BillingRecord[] = (invoices || []).map((inv: any) => ({
+        id: inv._id || inv.id || (inv.invoiceNumber || inv.number) || String(Math.random()),
+        type: 'invoice',
+        number: inv.invoiceNumber || inv.number || inv._id || inv.id || '',
+        patientName: inv.patientName || inv.patient || (inv.patientInfo && inv.patientInfo.name) || '',
+        patientId: inv.patientId || inv.accountId || (inv.patientInfo && (inv.patientInfo.patientId || inv.patientInfo.id)) || '',
+        date: inv.date || inv.invoiceDate || (inv.createdAt ? new Date(inv.createdAt).toISOString().split('T')[0] : ''),
+        time: inv.time || (inv.createdAt ? new Date(inv.createdAt).toLocaleTimeString() : ''),
+        amount: Number(inv.total ?? inv.amount ?? inv.subtotal ?? 0) || 0,
+        status: (inv.status || 'pending').toString().toLowerCase() as any,
+        description: inv.description || inv.notes || '',
+        paymentMethod: inv.paymentMethod || undefined,
+        department: inv.department || undefined,
+        items: inv.items || inv.lines || []
+      }));
+
+      // Map payments
+      const payRecords: BillingRecord[] = (payments || []).map((p: any) => ({
+        id: p._id || p.id || (p.reference || p.number) || String(Math.random()),
+        type: 'payment',
+        number: p.number || p.paymentNumber || p._id || p.id || '',
+        patientName: p.patientName || p.patient || (p.patientInfo && p.patientInfo.name) || '',
+        patientId: p.patientId || p.accountId || (p.patientInfo && (p.patientInfo.patientId || p.patientInfo.id)) || '',
+        date: p.paymentDate || p.date || (p.createdAt ? new Date(p.createdAt).toISOString().split('T')[0] : ''),
+        time: p.time || (p.createdAt ? new Date(p.createdAt).toLocaleTimeString() : ''),
+        amount: Number(p.amount ?? p.total ?? p.paid ?? 0) || 0,
+        status: (p.status || 'completed').toString().toLowerCase() as any,
+        description: p.description || `Payment for ${p.invoiceNumber || p.reference || ''}`,
+        paymentMethod: p.method || p.paymentMethod || undefined,
+        items: p.items || []
+      }));
+
+      // Merge: start with local billingService records (already in state) then append remote but avoid duplicates by composite key
+      const local = billingService.getAllRecords() as ServiceBillingRecord[];
+      const localMapped: BillingRecord[] = local.map(l => ({
+        id: l.id,
+        type: l.type,
+        number: l.number,
+        patientName: l.patientName,
+        patientId: l.patientId,
+        date: l.date,
+        time: l.time,
+        amount: l.amount,
+        status: l.status,
+        description: l.description,
+        paymentMethod: l.paymentMethod,
+        department: l.department,
+        items: l.items || []
+      }));
+
+      const byKey = new Map<string, BillingRecord>();
+      // prefer local then remote
+      [...localMapped, ...invRecords, ...payRecords].forEach(r => {
+        // Use a stable composite key to avoid collapsing different transactions for the same patient
+        const key = r.number || r.id || `${r.type}:${r.date}:${r.amount}:${r.patientId}`;
+        if (!byKey.has(key)) byKey.set(key, r);
+      });
+
+      const merged = Array.from(byKey.values()).sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      setBillingRecords(merged as BillingRecord[]);
+    } catch (err) {
+      console.warn('Failed to load remote billing data', err);
+    }
+  };
+
+  useEffect(() => {
+    // initial load
+    loadRemote();
+
+    // subscribe to billingService updates — when local records change (e.g., a new payment), re-sync remote data and re-merge
+    const unsub = billingService.subscribe(() => {
+      // call loadRemote but don't await — keep UI responsive
+      loadRemote().catch(e => console.warn('billingService-triggered loadRemote failed', e));
+    });
+
+    // Also listen to a window-level event so other modules (or external integrations) can trigger a UI refresh
+    const evHandler = (ev: any) => {
+      try {
+        // clear search/filter to surface the new transaction and reload remote
+        setSearchTerm('');
+        setSelectedFilter('all');
+        setSelectedPatientId('');
+        loadRemote().catch(() => {});
+      } catch (e) { /* ignore */ }
+    };
+    window.addEventListener('billing-updated', evHandler as EventListener);
+
+    return () => { unsub(); window.removeEventListener('billing-updated', evHandler as EventListener); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Compute chart series whenever billingRecords or chartRange changes
+  useEffect(() => {
+    const compute = () => {
+      const records = getMergedBillingRecords();
+      const now = new Date();
+      if (chartRange === 'today') {
+        const todayKey = now.toISOString().split('T')[0];
+        const total = records.filter(r => r.status === 'completed' && (r.type === 'invoice' || r.type === 'service' || r.type === 'pharmacy' || r.type === 'payment'))
+          .filter(r => (r.date || '').toString().startsWith(todayKey))
+          .reduce((s, r) => s + (Number(r.amount) || 0), 0);
+        setChartLabels([now.toLocaleDateString('en-PH')]);
+        setChartSeries([total]);
+        return;
+      }
+
+      if (chartRange === 'monthly') {
+        const year = now.getFullYear();
+        const month = now.getMonth();
+        const daysInMonth = new Date(year, month+1, 0).getDate();
+        const labels: string[] = [];
+        const values: number[] = [];
+        for (let d = 1; d <= daysInMonth; d++) {
+          const key = `${year}-${String(month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+          labels.push(String(d));
+          const total = records.filter(r => r.status === 'completed')
+            .filter(r => (r.date || '').startsWith(key))
+            .reduce((s,r)=> s + (Number(r.amount)||0), 0);
+          values.push(total);
+        }
+        setChartLabels(labels);
+        setChartSeries(values);
+        return;
+      }
+
+      // yearly
+      if (chartRange === 'yearly') {
+        const year = now.getFullYear();
+        const labels: string[] = [];
+        const values: number[] = [];
+        for (let m = 0; m < 12; m++) {
+          const monthKey = `${year}-${String(m+1).padStart(2,'0')}`;
+          labels.push(new Date(year, m, 1).toLocaleString('en-US', { month: 'short' }));
+          const total = records.filter(r => r.status === 'completed')
+            .filter(r => (r.date || '').startsWith(monthKey))
+            .reduce((s,r)=> s + (Number(r.amount)||0), 0);
+          values.push(total);
+        }
+        setChartLabels(labels);
+        setChartSeries(values);
+      }
+    };
+
+    compute();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [billingRecords, chartRange]);
   
   // Load pharmacy data when component mounts or when patient changes
   useEffect(() => {
@@ -218,7 +389,7 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
           record.number,
           record.type.charAt(0).toUpperCase() + record.type.slice(1),
           `"${record.patientName}"`,
-      patients.find(p => p.id === record.patientId)?.fullDisplay || resolvePatientDisplay(patients, record.patientId),
+  (patients.find(p => p.id === record.patientId)?.fullDisplay || resolvePatientDisplay(patients, record.patientId) || record.patientName || record.patientId || 'N/A'),
           `"${record.description}"`,
           record.department || '',
           record.paymentMethod || '',
@@ -246,6 +417,96 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
     }
   };
 
+  // Clear all billing records (local in-memory) — confirmation required
+  const handleClearConfirm = () => {
+    try {
+  // suppress remote sync so UI stays cleared until user explicitly refreshes
+  setSuppressRemoteSync(true);
+  suppressRemoteRef.current = true;
+  billingService.setRemoteSyncSuppressed(true);
+  // clear local billing records after suppression is set to avoid triggering a remote reload
+  // use silent clear to avoid notifying subscribers immediately
+  billingService.clearAllRecords({ notify: false });
+      setBillingRecords([]);
+      setPharmacyTransactions([]);
+      // notify other modules that billing was cleared
+      try { window.dispatchEvent(new CustomEvent('billing-cleared', { detail: { source: 'billing-history' } })); } catch (e) {}
+      toast?.success?.('Transaction history cleared');
+    } catch (e) {
+      console.error('Failed to clear billing records', e);
+      toast?.error?.('Failed to clear transaction history');
+    } finally {
+      setShowClearDialog(false);
+    }
+  };
+
+  // Archive all invoices/payments on the server (soft-archive)
+  const archiveAllOnServer = async () => {
+    // Only allow admins to perform server-wide archive
+    if (!isAdmin) {
+      toast.error('Only admins can archive records on the server');
+      setShowClearDialog(false);
+      return;
+    }
+
+    // require typed confirmation to avoid accidental mass actions
+    const confirmation = window.prompt('Type ARCHIVE to confirm server-wide archive of invoices and payments');
+    if (confirmation !== 'ARCHIVE') {
+      toast.error('Archive cancelled: confirmation mismatch');
+      return;
+    }
+
+    setShowClearDialog(false);
+    try {
+      const invRes = await fetch(`/api/archive/invoices/clear-all`, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+      if (!invRes.ok) throw new Error('Failed to archive invoices');
+      const payRes = await fetch(`/api/archive/payments/clear-all`, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+      if (!payRes.ok) throw new Error('Failed to archive payments');
+  toast.success('Invoices and payments archived on server');
+  // after server-side change, clear local suppression and reload remote data
+  setSuppressRemoteSync(false);
+  suppressRemoteRef.current = false;
+  billingService.setRemoteSyncSuppressed(false);
+      await loadRemote();
+      window.dispatchEvent(new CustomEvent('billing-updated', { detail: { source: 'archive-all' } }));
+    } catch (e) {
+      console.error('Archive all on server failed', e);
+      toast.error('Failed to archive records on server');
+    }
+  };
+
+  // Restore all invoices/payments on the server (undo soft-archive)
+  const restoreAllFromServer = async () => {
+    if (!isAdmin) {
+      toast.error('Only admins can restore records on the server');
+      setShowClearDialog(false);
+      return;
+    }
+
+    const confirmation = window.prompt('Type RESTORE to confirm server-wide restore of invoices and payments');
+    if (confirmation !== 'RESTORE') {
+      toast.error('Restore cancelled: confirmation mismatch');
+      return;
+    }
+
+    setShowClearDialog(false);
+    try {
+      const invRes = await fetch(`/api/archive/invoices/restore-all`, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+      if (!invRes.ok) throw new Error('Failed to restore invoices');
+      const payRes = await fetch(`/api/archive/payments/restore-all`, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+      if (!payRes.ok) throw new Error('Failed to restore payments');
+  toast.success('Invoices and payments restored on server');
+  setSuppressRemoteSync(false);
+  suppressRemoteRef.current = false;
+  billingService.setRemoteSyncSuppressed(false);
+      await loadRemote();
+      window.dispatchEvent(new CustomEvent('billing-updated', { detail: { source: 'restore-all' } }));
+    } catch (e) {
+      console.error('Restore all on server failed', e);
+      toast.error('Failed to restore records on server');
+    }
+  };
+
   // Generate comprehensive billing report
   const handleGenerateReport = () => {
     try {
@@ -256,7 +517,7 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
         day: 'numeric' 
       });
       
-  const patientFilterDisplay = selectedPatientId ? (patients.find(p => p.id === selectedPatientId)?.fullDisplay || resolvePatientDisplay(patients, selectedPatientId)) : '';
+  const patientFilterDisplay = selectedPatientId ? (patients.find(p => p.id === selectedPatientId)?.fullDisplay || resolvePatientDisplay(patients, selectedPatientId) || selectedPatientId) : '';
 
   const reportHTML = `
         <!DOCTYPE html>
@@ -406,7 +667,7 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
                   <td>${new Date(record.date).toLocaleDateString('en-PH')}${record.time ? ` ${record.time}` : ''}</td>
                   <td>${record.number}</td>
                   <td><span class="badge badge-${record.type}">${record.type.charAt(0).toUpperCase() + record.type.slice(1)}</span></td>
-                  <td>${record.patientName}<br/><small style="color: #666;">${patients.find(p => p.id === record.patientId)?.fullDisplay || resolvePatientDisplay(patients, record.patientId)}</small></td>
+            <td>${record.patientName}<br/><small style="color: #666;">${patients.find(p => p.id === record.patientId)?.fullDisplay || resolvePatientDisplay(patients, record.patientId) || record.patientId || 'N/A'}</small></td>
                   <td>${record.description}${record.department ? `<br/><small style="color: #666;">${record.department}</small>` : ''}</td>
                   <td style="font-weight: 600;">₱${record.amount.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</td>
                   <td><span class="badge badge-${record.status}">${record.status.charAt(0).toUpperCase() + record.status.slice(1)}</span></td>
@@ -635,7 +896,7 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
               </div>
                 <div class="info-item">
                   <span class="info-label">Patient ID</span>
-                  <span class="info-value">${patients.find(p => p.id === selectedRecord.patientId)?.fullDisplay || resolvePatientDisplay(patients, selectedRecord.patientId)}</span>
+                  <span class="info-value">${patients.find(p => p.id === selectedRecord.patientId)?.fullDisplay || resolvePatientDisplay(patients, selectedRecord.patientId) || selectedRecord.patientName || selectedRecord.patientId || 'N/A'}</span>
                 </div>
               ${selectedRecord.department ? `
                 <div class="info-item">
@@ -757,6 +1018,17 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
 
   return (
     <div className="space-y-6">
+      {suppressRemoteSync && (
+        <div className="p-4 bg-yellow-50 border-l-4 border-yellow-300 rounded"> 
+          <div className="flex items-center justify-between">
+            <div className="text-sm text-yellow-800">Local transaction history cleared. Server-side records are hidden until you refresh.</div>
+            <div className="flex items-center gap-2">
+              <Button variant="ghost" onClick={() => { setSuppressRemoteSync(false); suppressRemoteRef.current = false; billingService.setRemoteSyncSuppressed(false); loadRemote().catch(()=>{}); }}>Show Server Records</Button>
+              <Button onClick={() => { setSuppressRemoteSync(false); suppressRemoteRef.current = false; billingService.setRemoteSyncSuppressed(false); setSearchTerm(''); setSelectedFilter('all'); loadRemote().catch(()=>{}); }} className="bg-[#358E83] text-white">Refresh</Button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="flex items-center justify-end">
         <div className="flex gap-2">
           <Button variant="outline" onClick={handleExport}>
@@ -766,6 +1038,10 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
           <Button className="bg-[#E94D61] hover:bg-[#E94D61]/90 text-white" onClick={handleGenerateReport}>
             <FileText className="mr-2" size={16} />
             Generate Report
+          </Button>
+          <Button variant="destructive" onClick={() => setShowClearDialog(true)} className="ml-2">
+            <History className="mr-2" size={16} />
+            Clear Records
           </Button>
         </div>
       </div>
@@ -938,7 +1214,7 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
                           <div className="flex items-center gap-4 text-sm text-gray-600">
                             <div className="flex items-center gap-1">
                               <User size={14} />
-                              <span>{resolvePatientDisplay(patients, record.patientId)}</span>
+                              <span>{resolvePatientDisplay(patients, record.patientId) || record.patientName || record.patientId || 'N/A'}</span>
                             </div>
                             <div className="flex items-center gap-1">
                               <Calendar size={14} />
@@ -1043,10 +1319,44 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
                     <CardDescription>Revenue comparison over time</CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <div className="h-64 flex items-center justify-center bg-gray-50 rounded-lg">
-                      <div className="text-center">
-                        <Receipt className="mx-auto text-gray-400 mb-2" size={32} />
-                        <p className="text-gray-600">Chart visualization coming soon</p>
+                    <div>
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center gap-2">
+                          <Button size="sm" variant={chartRange === 'today' ? undefined : 'outline'} onClick={() => setChartRange('today')}>Today</Button>
+                          <Button size="sm" variant={chartRange === 'monthly' ? undefined : 'outline'} onClick={() => setChartRange('monthly')}>Monthly</Button>
+                          <Button size="sm" variant={chartRange === 'yearly' ? undefined : 'outline'} onClick={() => setChartRange('yearly')}>Yearly</Button>
+                        </div>
+                        <div className="text-sm text-gray-600">Total: <span className="font-semibold">₱{chartSeries.reduce((s,n)=> s + n, 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</span></div>
+                      </div>
+
+                      <div className="h-64 w-full p-2">
+                        {chartSeries.length === 0 || chartSeries.every(v => v === 0) ? (
+                          <div className="h-full flex items-center justify-center bg-gray-50 rounded-lg">
+                            <div className="text-center">
+                              <Receipt className="mx-auto text-gray-400 mb-2" size={32} />
+                              <p className="text-gray-600">No revenue data for the selected range</p>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="h-full w-full flex items-end space-x-2">
+                            {/* Simple SVG bars */}
+                            {(() => {
+                              const max = Math.max(...chartSeries, 1);
+                              return chartSeries.map((val, idx) => {
+                                const heightPct = (val / max) * 100;
+                                return (
+                                  <div key={idx} className="flex-1 flex flex-col items-center"> 
+                                    <div className="w-full h-full flex items-end">
+                                      {/* eslint-disable-next-line */}
+                                      <div title={`₱${val.toLocaleString('en-PH', { minimumFractionDigits: 2 })}`} style={{ height: `${heightPct}%` }} className="w-full bg-[#358E83] rounded-t-md" />
+                                    </div>
+                                    <div className="text-xs text-gray-600 mt-2">{chartLabels[idx]}</div>
+                                  </div>
+                                );
+                              });
+                            })()}
+                          </div>
+                        )}
                       </div>
                     </div>
                   </CardContent>
@@ -1156,7 +1466,7 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
                 </div>
                 <div>
                   <p className="text-sm text-gray-600">Patient</p>
-                  <p className="font-semibold">{resolvePatientDisplay(patients, selectedRecord.patientId)}</p>
+                  <p className="font-semibold">{resolvePatientDisplay(patients, selectedRecord.patientId) || selectedRecord.patientName || selectedRecord.patientId || 'N/A'}</p>
                 </div>
                 <div>
                   <p className="text-sm text-gray-600">Date</p>
@@ -1296,6 +1606,38 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
               </div>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Clear Records Confirmation Dialog */}
+      <Dialog open={showClearDialog} onOpenChange={setShowClearDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Clear Transaction History</DialogTitle>
+          </DialogHeader>
+          <div className="p-4 text-sm text-gray-700">
+            This will permanently remove all transaction history shown in the Billing History (local in-memory records). This does not delete data from the backend. Are you sure you want to continue?
+          </div>
+          <div className="flex items-center justify-between p-4 gap-4">
+            <div>
+              <Button variant="outline" onClick={() => setShowClearDialog(false)}>Cancel</Button>
+            </div>
+
+            <div className="flex-1 flex items-center justify-center gap-2 flex-wrap">
+              {isAdmin ? (
+                <>
+                  <Button variant="outline" size="sm" onClick={archiveAllOnServer}>Archive all on server</Button>
+                  <Button variant="outline" size="sm" onClick={restoreAllFromServer}>Restore all from server</Button>
+                </>
+              ) : (
+                <div className="text-sm text-gray-500">Server archive/restore actions are restricted to administrators.</div>
+              )}
+            </div>
+
+            <div>
+              <Button className="bg-red-600 text-white" onClick={handleClearConfirm}>Clear Records</Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

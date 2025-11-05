@@ -16,7 +16,9 @@ import { PriceListService } from "../services/priceListService";
 import { toast } from "sonner";
 import axios from "axios";
 import { useEffect, useState } from "react";
+import { Switch } from "./ui/switch";
 import { fetchPatients } from "../services/api.js";
+import { billingService } from "../services/billingService";
 import { getDisplayPatientId, getInternalPatientKey, normalizePatients, resolvePatientDisplay } from "../utils/patientId";
 import { pharmacyService } from "../services/pharmacyIntegration";
 import { DiscountService, DiscountOption } from "../services/discountService";
@@ -123,6 +125,7 @@ export function InvoiceGeneration({ onNavigateToView }: InvoiceGenerationProps) 
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [invoiceToDelete, setInvoiceToDelete] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [activeTab, setActiveTab] = useState<'active' | 'archived'>('active');
 
   // Fetch helper inside component so it can call setInvoices
   const fetchInvoices = async () => {
@@ -140,9 +143,11 @@ export function InvoiceGeneration({ onNavigateToView }: InvoiceGenerationProps) 
         ? payPayload
         : (payPayload?.data || []);
 
-      const invList: any[] = Array.isArray(invPayload)
+      let invList: any[] = Array.isArray(invPayload)
         ? invPayload
         : (invPayload?.data || []);
+
+      // Keep all invoices fetched; UI will split active vs archived into tabs
 
       const normalized = invList.map((inv: any) => {
         const id = inv._id || inv.id;
@@ -182,6 +187,7 @@ export function InvoiceGeneration({ onNavigateToView }: InvoiceGenerationProps) 
           generatedBy: inv.generatedBy || "Billing Department",
           generatedAt: inv.generatedAt || inv.date || new Date().toISOString(),
           notes: inv.notes || "",
+          isArchived: !!inv.isArchived,
         } as Invoice;
       });
 
@@ -214,6 +220,9 @@ export function InvoiceGeneration({ onNavigateToView }: InvoiceGenerationProps) 
   useEffect(() => {
     fetchInvoices();
   }, []);
+
+  // Re-fetch invoices when the archived toggle changes
+  // (no-op) invoices are fetched on mount; tabs will filter client-side
 
   const [newInvoice, setNewInvoice] = useState({
     patientName: "",
@@ -468,6 +477,43 @@ const handleGenerateInvoice = async () => {
 
   setInvoices((prev) => [saved as Invoice, ...prev]);
 
+      // Push the created invoice into the shared in-memory billingService so
+      // other components (PaymentProcessing, BillingHistory) can immediately
+      // see it even when remote sync is suppressed.
+      try {
+        const mappedItems = Array.isArray(saved.items) ? saved.items.map((it: any) => ({
+          id: it.id || it._id || Date.now().toString(),
+          description: it.description || it.service || it.name || 'Item',
+          quantity: it.quantity || it.qty || 1,
+          unitPrice: it.rate || it.unitPrice || it.price || 0,
+          totalPrice: it.amount || it.totalPrice || ((it.quantity || 1) * (it.rate || it.unitPrice || 0)),
+          category: it.category || it.group || 'General'
+        })) : [];
+
+        const record = billingService.addInvoiceRecord({
+          invoiceNumber: saved.number || saved.invoiceNumber || invoice.number,
+          patientName: saved.patientName || invoice.patientName,
+          patientId: saved.patientId || invoice.patientId,
+          amount: saved.total || saved.amount || invoice.total,
+          description: saved.notes || invoice.notes || '',
+          date: saved.date || new Date().toISOString(),
+          time: saved.time || new Date(saved.date || Date.now()).toLocaleTimeString(),
+          subtotal: saved.subtotal || saved.amount || 0,
+          discount: saved.discount || 0,
+          discountType: saved.discountType || saved.discountMode || 'none',
+          discountPercentage: saved.discountPercentage || 0,
+          tax: saved.tax || saved.vat || 0,
+          taxRate: saved.taxRate || 0,
+          totalBeforeTax: saved.totalBeforeTax || undefined,
+          items: mappedItems
+        });
+
+        // Notify any global listeners as well
+        try { window.dispatchEvent(new CustomEvent('billing-updated', { detail: { record } })); } catch (e) { /* ignore */ }
+      } catch (e) {
+        console.warn('Failed to push invoice into billingService', e);
+      }
+
   // Open the unified invoice details container so generated invoice
   // and viewed invoice use the same modal/container
   setSelectedInvoice(saved as Invoice & { patient?: any });
@@ -707,16 +753,18 @@ const confirmDeleteInvoice = async () => {
   if (!invoiceToDelete) return;
 
   try {
-    const res: any = await axios.delete(`${API_BASE}/invoices/${invoiceToDelete}`);
+    // Move invoice to archive instead of permanent delete (cashier action)
+    const res: any = await axios.post(`${API_BASE}/archive/invoices/${invoiceToDelete}/archive`, { archivedBy: 'cashier' });
     if (res?.data?.success) {
-      setInvoices((prev) => prev.filter((inv) => inv.id !== invoiceToDelete));
-      toast.success("Invoice deleted successfully!");
+      // mark locally as archived so it shows up in the Archived tab
+      setInvoices((prev) => prev.map((inv) => inv.id === invoiceToDelete ? { ...inv, isArchived: true } : inv));
+      toast.success("Invoice moved to archive");
     } else {
-      toast.error("Failed to delete invoice");
+      toast.error("Failed to move invoice to archive");
     }
   } catch (error) {
-    console.error("Error deleting invoice:", error);
-    toast.error("Server error while deleting invoice");
+    console.error("Error archiving invoice:", error);
+    toast.error("Server error while archiving invoice");
   } finally {
     setShowDeleteDialog(false);
     setInvoiceToDelete(null);
@@ -729,6 +777,15 @@ const confirmDeleteInvoice = async () => {
     invoice.patientName.toLowerCase().includes(searchQuery.toLowerCase()) ||
     invoice.patientId.toLowerCase().includes(searchQuery.toLowerCase())
   );
+
+  // Show invoices depending on active tab (active vs archived)
+  const displayedInvoices = invoices
+    .filter(inv => (activeTab === 'active' ? !inv.isArchived : !!inv.isArchived))
+    .filter(invoice =>
+      invoice.number.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      invoice.patientName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      invoice.patientId.toLowerCase().includes(searchQuery.toLowerCase())
+    );
 
   return (
     <div className="space-y-6">
@@ -1303,45 +1360,42 @@ const confirmDeleteInvoice = async () => {
           {generatedInvoice && (
             <div className="flex flex-col">
               <div id="invoice-receipt-print" className="space-y-2 print:p-1 text-sm overflow-y-auto max-h-[60vh]">
-              {/* Hospital Header */}
-              <div className="text-center border-b pb-2">
-                <h2 className="text-2xl font-bold text-[#358E83]">MediCare Hospital</h2>
-                <p className="text-xs text-gray-600">123 Health Street, Medical District</p>
-                <p className="text-xs text-gray-600">Tel: (02) 1234-5678</p>
-              </div>
-
-              {/* Invoice Details */}
-                <div className="grid grid-cols-2 gap-2 text-sm">
+              {/* Two-column header: hospital details (left) and invoice/patient metadata (right) */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-b pb-3">
                 <div>
-                  <p className="text-xs text-gray-600">Invoice Number:</p>
-                  <p className="font-semibold text-sm">{generatedInvoice.number}</p>
+                  <h2 className="text-2xl font-bold text-[#358E83]">MediCare Hospital</h2>
+                  <p className="text-xs text-gray-600">123 Health Street, Medical District</p>
+                  <p className="text-xs text-gray-600">Tel: (02) 1234-5678</p>
                 </div>
-                <div>
-                  <p className="text-xs text-gray-600">Date Issued:</p>
-                  <p className="font-semibold text-sm">{formatDate(generatedInvoice.date)}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-600">Patient Name:</p>
-                  <p className="font-semibold text-sm">{generatedInvoice.patientName}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-600">Patient ID:</p>
-                  <p className="font-semibold text-sm">{resolvePatientDisplay(patients, generatedInvoice.patientId || generatedInvoice.id || generatedInvoice._id)}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-600">Payment Terms:</p>
-                  <p className="font-semibold text-sm">
-                    {formatDate(generatedInvoice.dueDate)}
-                    {generatedInvoice.dueDate === generatedInvoice.date && (
-                      <span className="text-xs text-orange-600 ml-2">(Due Immediately)</span>
-                    )}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-600">Status:</p>
-                  <Badge className={getStatusColor(generatedInvoice.status)}>
-                    <span className="text-[11px]">{generatedInvoice.status.toUpperCase()}</span>
-                  </Badge>
+                <div className="text-sm">
+                  <div className="mb-2">
+                    <p className="text-xs text-gray-600">Invoice Number:</p>
+                    <p className="font-semibold text-sm">{generatedInvoice.number}</p>
+                  </div>
+                  <div className="mb-2">
+                    <p className="text-xs text-gray-600">Date Issued:</p>
+                    <p className="font-semibold text-sm">{formatDate(generatedInvoice.date)}</p>
+                  </div>
+                  <div className="mb-2">
+                    <p className="text-xs text-gray-600">Patient Name:</p>
+                    <p className="font-semibold text-sm">{generatedInvoice.patientName}</p>
+                  </div>
+                  <div className="mb-2">
+                    <p className="text-xs text-gray-600">Patient ID:</p>
+                    <p className="font-semibold text-sm">{resolvePatientDisplay(patients, generatedInvoice.patientId || generatedInvoice.id || generatedInvoice._id)}</p>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs text-gray-600">Payment Terms:</p>
+                      <p className="font-semibold text-sm">{formatDate(generatedInvoice.dueDate)}{generatedInvoice.dueDate === generatedInvoice.date && (<span className="text-xs text-orange-600 ml-2">(Due Immediately)</span>)}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xs text-gray-600">Status:</p>
+                      <Badge className={getStatusColor(generatedInvoice.status)}>
+                        <span className="text-[11px]">{generatedInvoice.status.toUpperCase()}</span>
+                      </Badge>
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -1512,13 +1566,33 @@ const confirmDeleteInvoice = async () => {
             </div>
           </div>
 
+          <div className="flex items-center justify-between mb-4">
+            <div />
+            <div className="flex items-center gap-3">
+              <div className="flex rounded-md bg-white border">
+                <button
+                  onClick={() => setActiveTab('active')}
+                  className={`px-3 py-1 ${activeTab === 'active' ? 'bg-[#358E83] text-white' : 'text-gray-700'}`}
+                >
+                  Invoices
+                </button>
+                <button
+                  onClick={() => setActiveTab('archived')}
+                  className={`px-3 py-1 ${activeTab === 'archived' ? 'bg-[#358E83] text-white' : 'text-gray-700'}`}
+                >
+                  Archived Invoices
+                </button>
+              </div>
+            </div>
+          </div>
+
           <div className="space-y-4">
-            {filteredInvoices.length === 0 ? (
+            {displayedInvoices.length === 0 ? (
               <div className="text-center py-8 text-gray-500">
-                No invoices found. Create your first invoice to get started.
+                No invoices found for this view.
               </div>
             ) : (
-              filteredInvoices.map((invoice) => (
+              displayedInvoices.map((invoice) => (
                 <Card key={invoice.id} className="border">
                   <CardContent className="p-4">
                     <div className="flex items-center justify-between">
@@ -1562,14 +1636,39 @@ const confirmDeleteInvoice = async () => {
                           >
                             <Eye size={16} />
                           </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleDeleteInvoice(invoice.id)}
-                            className="text-red-600 hover:text-red-800"
-                          >
-                            <Trash2 size={16} />
-                          </Button>
+
+                          {activeTab === 'active' ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleDeleteInvoice(invoice.id)}
+                              className="text-red-600 hover:text-red-800"
+                            >
+                              <Trash2 size={16} />
+                            </Button>
+                          ) : (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={async () => {
+                                try {
+                                  const res: any = await axios.post(`${API_BASE}/archive/invoices/${invoice.id}/restore`);
+                                  if (res?.data?.success) {
+                                    setInvoices((prev) => prev.map(inv => inv.id === invoice.id ? { ...inv, isArchived: false } : inv));
+                                    toast.success('Invoice restored');
+                                  } else {
+                                    toast.error('Failed to restore invoice');
+                                  }
+                                } catch (err) {
+                                  console.error('Error restoring invoice:', err);
+                                  toast.error('Server error while restoring invoice');
+                                }
+                              }}
+                              className="text-green-700 hover:text-green-900"
+                            >
+                              <Check className="h-4 w-4" />
+                            </Button>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -1704,9 +1803,9 @@ const confirmDeleteInvoice = async () => {
       <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Invoice</AlertDialogTitle>
+            <AlertDialogTitle>Move Invoice to Archive?</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete this invoice? This action cannot be undone.
+              Are you sure you want to move this invoice to the archive? You can restore the invoice later from the Archive.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -1715,7 +1814,7 @@ const confirmDeleteInvoice = async () => {
               onClick={confirmDeleteInvoice}
               className="bg-red-600 hover:bg-red-700"
             >
-              Delete
+              Move to Archive
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import { IntegrationStatus } from "./IntegrationStatus";
 import { configManager } from "../services/configManager";
-import { toast } from "sonner@2.0.3";
+import { toast } from "sonner";
 
 interface SettingsProps {
   onNavigateToView?: (view: string) => void;

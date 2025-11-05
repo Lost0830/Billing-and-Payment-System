@@ -15,6 +15,7 @@ import {
   ChevronLeft,
   Users,
   UserCog,
+  Archive,
 } from "lucide-react";
 
 interface UserSession {
@@ -44,7 +45,7 @@ export function MainLayout({
 
   // Check if we're in the billing system to show sidebar
   const isBillingSystem = userSession?.system === "billing" || 
-    ["medicare-billing", "invoice", "payment", "history", "discounts", "user-management", "discount-management", "patients-management"].includes(currentView);
+    ["medicare-billing", "invoice", "payment", "history", "discounts", "user-management", "discount-management", "patients-management", "archive"].includes(currentView);
 
   // Get navigation items for billing sidebar
   const getBillingSidebarItems = () => {
@@ -53,10 +54,10 @@ export function MainLayout({
     // Admin users get Patient Management, Discount Management, User Management, and Settings
     if (userSession?.role === "admin") {
       baseItems.push({
-        id: "dashboard",
+        id: "medicare-billing",
         label: "Dashboard",
         icon: Activity,
-        description: "Admin dashboard overview"
+        description: "Admin billing dashboard"
       });
       baseItems.push({
         id: "patients-management",
@@ -75,6 +76,12 @@ export function MainLayout({
         label: "User Management",
         icon: Users,
         description: "Manage system users and roles"
+      });
+      baseItems.push({
+        id: "archive",
+        label: "Archive",
+        icon: Archive,
+        description: "View and manage archived items"
       });
       baseItems.push({
         id: "settings", 
@@ -159,7 +166,7 @@ export function MainLayout({
     if (itemId === "dashboard" && currentView === "dashboard") return true;
     if (itemId === "emr" && (currentView === "patients" || currentView === "appointments")) return true;
     if (itemId === "pharmacy" && currentView === "pharmacy") return true;
-    if (itemId === "billing" && ["medicare-billing", "invoice", "payment", "history", "discounts", "user-management", "discount-management", "patients-management"].includes(currentView)) return true;
+  if (itemId === "billing" && ["medicare-billing", "invoice", "payment", "history", "discounts", "user-management", "discount-management", "patients-management", "archive"].includes(currentView)) return true;
     if (itemId === "settings" && currentView === "settings") return true;
     return false;
   };

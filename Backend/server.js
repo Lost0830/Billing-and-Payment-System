@@ -4,6 +4,7 @@ import dotenv from "dotenv";
 import cors from "cors";
 import crypto from "crypto";
 import nodemailer from "nodemailer";
+import bcrypt from "bcryptjs";
 import User from "./models/users.js";
 import Patient from "./models/patient.js";
 import Billing from "./models/billing.js";
@@ -15,6 +16,7 @@ import promotionRoutes from "./Routes/promotionsroutes.js";
 import invoiceRoutes from "./Routes/invoices.js";
 import paymentRoutes from "./Routes/payments.js";
 import patientRoutes from "./Routes/patients.js";
+import archiveRoutes from "./Routes/archive.js";
 
 dotenv.config();
 
@@ -34,12 +36,27 @@ app.use(
   })
 );
 
+// Simple API request logger to help debug proxy / CORS / network issues
+app.use('/api', (req, res, next) => {
+  try {
+    console.log(`--> API ${req.method} ${req.originalUrl} - Origin: ${req.headers.origin || 'none'}`);
+    if (req.method !== 'GET' && req.body && Object.keys(req.body).length > 0) {
+      // Avoid printing sensitive data like passwords in production; this is dev-only
+      const safeBody = { ...req.body };
+      if (safeBody.password) safeBody.password = '<<REDACTED>>';
+      console.log('    body:', JSON.stringify(safeBody));
+    }
+  } catch (e) {}
+  next();
+});
+
 // === Register API routes BEFORE any static / catch-all ===
 app.use("/api/discounts", discountRoutes);
 app.use("/api/promotions", promotionRoutes);
 app.use("/api/invoices", invoiceRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/patients", patientRoutes);
+app.use("/api/archive", archiveRoutes);
 
 // (Optional) Serve frontend build only when you actually have a built frontend
 // const path = await import('path'); // if needed
@@ -56,6 +73,26 @@ app.use("/api/invoices", invoiceRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/patients", patientRoutes);
 
+// Create test user route
+app.post("/api/create-test-user", async (req, res) => {
+  try {
+    await User.deleteMany({}); // Clear existing users
+    
+    const user = new User({
+      name: 'Test Admin',
+      email: 'test@admin.com',
+      password: 'test123',
+      role: 'admin'
+    });
+    
+    await user.save();
+    res.json({ success: true, message: 'Test user created successfully' });
+  } catch (err) {
+    console.error('Error creating test user:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // Simple health & API endpoints (users, billing, payments, seed, auth)
 app.get("/api/health", (req, res) => {
   const dbState = mongoose.connection.readyState;
@@ -71,15 +108,27 @@ app.get("/api/health", (req, res) => {
 app.post("/api/seed", async (req, res) => {
   try {
     const sampleUsers = [
+      // Primary demo accounts
       { name: "Admin User", email: "admin@Billing.com", password: "admin123", role: "admin", department: "Administration", status: "Active" },
       { name: "Jane Accountant", email: "jane@Billing.com", password: "password123", role: "accountant", department: "Billing", status: "Active" },
       { name: "John Pharmacist", email: "john@pharmacy.com", password: "pharma123", role: "pharmacist", department: "Pharmacy", status: "Active" },
       { name: "Dr. Smith", email: "doctor@hospital.com", password: "doctor123", role: "doctor", department: "EMR", status: "Active" },
-      { name: "Nurse Wilson", email: "nurse@hospital.com", password: "nurse123", role: "nurse", department: "EMR", status: "Active" }
+      { name: "Nurse Wilson", email: "nurse@hospital.com", password: "nurse123", role: "nurse", department: "EMR", status: "Active" },
+      // Common alternate domains used in the frontend/dev (aliases)
+      { name: "Admin HIMS", email: "admin@hims.com", password: "admin123", role: "admin", department: "Administration", status: "Active" },
+      { name: "Jane HIMS", email: "jane@hims.com", password: "password123", role: "accountant", department: "Billing", status: "Active" },
+      { name: "Admin Hospital", email: "admin@hospital.com", password: "admin123", role: "admin", department: "Administration", status: "Active" }
     ];
 
     await User.deleteMany({});
-    const users = await User.insertMany(sampleUsers);
+    
+    // Create users one by one to ensure password hashing middleware runs
+    const users = [];
+    for (const userData of sampleUsers) {
+      const user = new User(userData);
+      const savedUser = await user.save();
+      users.push(savedUser);
+    }
 
     res.json({ success: true, message: "✅ Database seeded successfully!", inserted: users.length });
   } catch (err) {
@@ -101,7 +150,28 @@ app.post("/api/seed-patients", async (req, res) => {
         email: "juan.santos@example.com",
         bloodType: "O+",
         services: [],
-        medicines: [],
+        medicines: [
+          {
+            name: "Amoxicillin",
+            strength: "500mg",
+            quantity: 14,
+            unitPrice: 25,
+            totalPrice: 350,
+            datePrescribed: "2025-01-05",
+            prescribedBy: "Dr. Smith",
+            instructions: "Take 1 capsule three times daily after meals"
+          },
+          {
+            name: "Paracetamol",
+            strength: "500mg",
+            quantity: 10,
+            unitPrice: 5,
+            totalPrice: 50,
+            datePrescribed: "2025-01-05",
+            prescribedBy: "Dr. Smith",
+            instructions: "Take 1 tablet every 6 hours as needed for pain"
+          }
+        ],
         createdBy: "John",
         createdByRole: "admin"
       },
@@ -114,7 +184,18 @@ app.post("/api/seed-patients", async (req, res) => {
         email: "anna.reyes@example.com",
         bloodType: "A+",
         services: [],
-        medicines: [],
+        medicines: [
+          {
+            name: "Ibuprofen",
+            strength: "200mg",
+            quantity: 20,
+            unitPrice: 8,
+            totalPrice: 160,
+            datePrescribed: "2025-02-10",
+            prescribedBy: "Dr. Lee",
+            instructions: "Take 1 tablet every 8 hours with food"
+          }
+        ],
         createdBy: "John",
         createdByRole: "admin"
       },
@@ -127,7 +208,18 @@ app.post("/api/seed-patients", async (req, res) => {
         email: "maria.santos@example.com",
         bloodType: "B+",
         services: [],
-        medicines: [],
+        medicines: [
+          {
+            name: "Amlodipine",
+            strength: "5mg",
+            quantity: 30,
+            unitPrice: 12,
+            totalPrice: 360,
+            datePrescribed: "2025-03-01",
+            prescribedBy: "Dr. Cruz",
+            instructions: "Take 1 tablet daily in the morning"
+          }
+        ],
         createdBy: "Admin",
         createdByRole: "admin"
       }
@@ -146,14 +238,94 @@ app.post("/api/seed-patients", async (req, res) => {
 // Simple login endpoint (plain password compare)
 app.post("/api/auth/login", async (req, res) => {
   try {
+    console.log('=== LOGIN ATTEMPT START ===');
+    console.log('Request body:', JSON.stringify(req.body, null, 2));
+    
     const { email, password } = req.body;
-    if (!email || !password) return res.status(400).json({ success: false, message: "Email and password are required" });
+    
+    // Basic validation
+    if (!email || !password) {
+      console.log('Error: Missing email or password');
+      return res.status(400).json({ 
+        success: false, 
+        message: "Email and password are required",
+        debug: { email: !!email, password: !!password }
+      });
+    }
 
-    const user = await User.findOne({ email: email.trim().toLowerCase() });
-    if (!user) return res.status(404).json({ success: false, message: "User not found" });
-    if (user.password !== password) return res.status(401).json({ success: false, message: "Invalid email or password" });
+    // Email normalization
+    const normalizedEmail = email.trim().toLowerCase();
+    console.log('Normalized email:', normalizedEmail);
+    
+    // Database connection check
+    if (mongoose.connection.readyState !== 1) {
+      console.log('Error: Database not connected. State:', mongoose.connection.readyState);
+      return res.status(503).json({ 
+        success: false, 
+        message: "Database connection error",
+        debug: { mongoState: mongoose.connection.readyState }
+      });
+    }
+    
+  // Find user (case-insensitive match so stored email casing doesn't block login)
+  const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const user = await User.findOne({ email: { $regex: `^${escapeRegex(normalizedEmail)}$`, $options: 'i' } });
+    console.log('User search result:', user ? {
+      id: user._id,
+      email: user.email,
+      name: user.name,
+      hasPassword: !!user.password,
+      passwordLength: user.password ? user.password.length : 0
+    } : 'No user found');
+    
+    if (!user) {
+      console.log('Error: No user found with email:', normalizedEmail);
+      return res.status(401).json({ 
+        success: false, 
+        message: "Invalid email or password",
+        debug: { email: normalizedEmail, reason: 'user_not_found' }
+      });
+    }
+    
+    // Password comparison
+    console.log('Attempting password comparison...');
+    try {
+      const isMatch = await user.comparePassword(password);
+      console.log('Password comparison result:', isMatch);
+      
+      if (!isMatch) {
+        console.log('Error: Password mismatch');
+        return res.status(401).json({ 
+          success: false, 
+          message: "Invalid email or password",
+          debug: { reason: 'password_mismatch' }
+        });
+      }
+    } catch (pwError) {
+      console.error('Password comparison error:', pwError);
+      return res.status(500).json({ 
+        success: false, 
+        message: "Error verifying password",
+        debug: { error: pwError.message }
+      });
+    }
 
-    res.json({ success: true, message: "✅ Login successful", user: { id: user._id, name: user.name, email: user.email, role: user.role, department: user.department, status: user.status } });
+    // Success response
+    console.log('Login successful for:', user.email);
+    res.json({ 
+      success: true, 
+      message: "✅ Login successful", 
+      user: { 
+        id: user._id, 
+        name: user.name, 
+        email: user.email, 
+        role: user.role, 
+        department: user.department, 
+        status: user.status 
+      }
+    });
+    console.log('=== LOGIN ATTEMPT END ===');
+  
   } catch (err) {
     console.error("Login error:", err);
     res.status(500).json({ success: false, message: "Login failed", error: err.message });
@@ -161,9 +333,41 @@ app.post("/api/auth/login", async (req, res) => {
 });
 
 // Users endpoints
+app.post("/api/seed", async (req, res) => {
+  try {
+    const sampleUsers = [
+      { name: "Admin User", email: "admin@Billing.com", password: "admin123", role: "admin", department: "Administration", status: "Active" },
+      { name: "Jane Accountant", email: "jane@Billing.com", password: "password123", role: "accountant", department: "Billing", status: "Active" },
+      { name: "John Pharmacist", email: "john@pharmacy.com", password: "pharma123", role: "pharmacist", department: "Pharmacy", status: "Active" },
+      { name: "Dr. Smith", email: "doctor@hospital.com", password: "doctor123", role: "doctor", department: "EMR", status: "Active" },
+      { name: "Nurse Wilson", email: "nurse@hospital.com", password: "nurse123", role: "nurse", department: "EMR", status: "Active" }
+    ];
+
+    // Use User.create so mongoose pre-save middleware (password hashing) runs for each document
+    await User.deleteMany({});
+    const users = await User.create(
+      sampleUsers.map(u => ({
+        ...u,
+        email: u.email.trim().toLowerCase(),
+        role: (u.role || 'user').toLowerCase(),
+        department: u.department || 'General',
+        status: u.status || 'Active'
+      }))
+    );
+
+    res.json({ success: true, message: "✅ Database seeded successfully!", inserted: users.length });
+  } catch (err) {
+    console.error("Seed error:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+// Users endpoints
 app.get("/api/users", async (req, res) => {
   try {
-    const users = await User.find();
+    // By default exclude archived users unless explicitly requested
+    const includeArchived = String(req.query.includeArchived || '').toLowerCase() === 'true';
+    const filter = includeArchived ? {} : { isArchived: { $ne: true } };
+    const users = await User.find(filter);
     res.json({ success: true, count: users.length, data: users });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -174,11 +378,20 @@ app.post("/api/users", async (req, res) => {
   try {
     const { name, email, password, role, department, status } = req.body;
     if (!email || !password) return res.status(400).json({ success: false, message: "Email and password are required." });
+    if (password.length < 8) return res.status(400).json({ success: false, message: "Password must be at least 8 characters long." });
 
     const existing = await User.findOne({ email: email.trim().toLowerCase() });
     if (existing) return res.status(409).json({ success: false, message: "User with this email already exists." });
 
-    const newUser = new User({ name: name || email.split("@")[0], email: email.trim().toLowerCase(), password, role: (role || "user").toLowerCase(), department: department || "General", status: status || "Active", createdAt: new Date() });
+    const newUser = new User({
+      name: name || (email ? email.split("@")[0] : ""),
+      email: email.trim().toLowerCase(),
+      password, // will be hashed by pre-save middleware
+      role: (role || "user").toLowerCase(),
+      department: department || "General",
+      status: status || "Active",
+      createdAt: new Date()
+    });
     const saved = await newUser.save();
     res.status(201).json({ success: true, message: "User created successfully", data: saved });
   } catch (err) {

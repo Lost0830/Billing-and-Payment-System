@@ -13,6 +13,7 @@ import { DiscountsPromotions } from "../DiscountsPromotions";
 import { DiscountManagement } from "../DiscountManagement";
 import { UserManagement } from "../UserManagement";
 import { MainLayout } from "../MainLayout";
+import { Archive } from "../Archive";
 import { UserSession } from "../../hooks/useAuth";
 
 interface AuthenticatedAppProps {
@@ -89,6 +90,11 @@ export function AuthenticatedApp({ currentView, userSession, onNavigateToView }:
         return {
           title: "Settings",
           description: "Configure system settings and user preferences."
+        };
+      case "archive":
+        return {
+          title: "Archive",
+          description: "View, restore, or permanently delete archived items."
         };
       default:
         return {
@@ -175,6 +181,8 @@ export function AuthenticatedApp({ currentView, userSession, onNavigateToView }:
         return <Pharmacy onNavigateToView={onNavigateToView} />;
       case "settings":
         return <Settings onNavigateToView={onNavigateToView} />;
+      case "archive":
+        return <Archive />;
       default:
         return userSession.role === 'admin'
           ? <AdminDashboard onNavigateToModule={onNavigateToView} />

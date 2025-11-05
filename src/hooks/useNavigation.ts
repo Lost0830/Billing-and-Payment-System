@@ -7,7 +7,7 @@ export function useNavigation() {
   const navigateToView = (view: string, userSession?: UserSession | null) => {
     // Restrict navigation based on user's system
     if (userSession?.system === "billing") {
-      const allowedBillingViews = ["medicare-billing", "invoice", "payment", "history", "discounts", "user-management", "discount-management", "patients-management", "calculator", "settings"];
+  const allowedBillingViews = ["medicare-billing", "invoice", "payment", "history", "discounts", "user-management", "discount-management", "patients-management", "archive", "calculator", "settings"];
       if (view === "billing") {
         setCurrentView("medicare-billing");
       } else if (allowedBillingViews.includes(view)) {

@@ -12,6 +12,7 @@ export interface Discount {
   startDate: string;
   endDate: string;
   isActive: boolean;
+  isArchived?: boolean;
   usageCount: number;
   maxUsage?: number;
   applicableServices?: string[];
@@ -29,6 +30,7 @@ export interface Promotion {
   validFrom: string;
   validTo: string;
   isActive: boolean;
+  isArchived?: boolean;
   targetAudience: string;
   bannerImage?: string;
   createdBy?: string;
@@ -71,7 +73,8 @@ const DEFAULT_DISCOUNTS: Discount[] = [
     conditions: "Valid ID required. Cannot be combined with other offers.",
     createdBy: "System",
     createdAt: "2025-01-01T00:00:00Z",
-    updatedAt: "2025-01-01T00:00:00Z"
+    updatedAt: "2025-01-01T00:00:00Z",
+    isArchived: false
   },
   {
     id: "2",
@@ -88,7 +91,8 @@ const DEFAULT_DISCOUNTS: Discount[] = [
     conditions: "Valid PWD ID required.",
     createdBy: "System",
     createdAt: "2025-01-01T00:00:00Z",
-    updatedAt: "2025-01-01T00:00:00Z"
+    updatedAt: "2025-01-01T00:00:00Z",
+    isArchived: false
   },
   {
     id: "3",
@@ -105,7 +109,8 @@ const DEFAULT_DISCOUNTS: Discount[] = [
     conditions: "Valid employee ID required.",
     createdBy: "System",
     createdAt: "2025-01-01T00:00:00Z",
-    updatedAt: "2025-01-01T00:00:00Z"
+    updatedAt: "2025-01-01T00:00:00Z",
+    isArchived: false
   },
   {
     id: "4",
@@ -123,7 +128,8 @@ const DEFAULT_DISCOUNTS: Discount[] = [
     applicableServices: ["Blood Test", "X-Ray", "ECG", "Ultrasound"],
     createdBy: "System",
     createdAt: "2025-01-01T00:00:00Z",
-    updatedAt: "2025-01-01T00:00:00Z"
+    updatedAt: "2025-01-01T00:00:00Z",
+    isArchived: false
   },
   {
     id: "5",
@@ -140,7 +146,8 @@ const DEFAULT_DISCOUNTS: Discount[] = [
     endDate: "2025-12-31",
     createdBy: "System",
     createdAt: "2025-01-01T00:00:00Z",
-    updatedAt: "2025-01-01T00:00:00Z"
+    updatedAt: "2025-01-01T00:00:00Z",
+    isArchived: false
   },
   {
     id: "6",
@@ -157,7 +164,8 @@ const DEFAULT_DISCOUNTS: Discount[] = [
     endDate: "2025-12-31",
     createdBy: "System",
     createdAt: "2025-01-01T00:00:00Z",
-    updatedAt: "2025-01-01T00:00:00Z"
+    updatedAt: "2025-01-01T00:00:00Z",
+    isArchived: false
   },
   {
     id: "7",
@@ -174,7 +182,8 @@ const DEFAULT_DISCOUNTS: Discount[] = [
     endDate: "2025-12-31",
     createdBy: "System",
     createdAt: "2025-01-01T00:00:00Z",
-    updatedAt: "2025-01-01T00:00:00Z"
+    updatedAt: "2025-01-01T00:00:00Z",
+    isArchived: false
   }
 ];
 
@@ -190,7 +199,8 @@ const DEFAULT_PROMOTIONS: Promotion[] = [
     targetAudience: "General Public",
     createdBy: "System",
     createdAt: "2025-01-01T00:00:00Z",
-    updatedAt: "2025-01-01T00:00:00Z"
+    updatedAt: "2025-01-01T00:00:00Z",
+    isArchived: false
   },
   {
     id: "2",
@@ -203,7 +213,8 @@ const DEFAULT_PROMOTIONS: Promotion[] = [
     targetAudience: "Couples",
     createdBy: "System",
     createdAt: "2025-01-01T00:00:00Z",
-    updatedAt: "2025-01-01T00:00:00Z"
+    updatedAt: "2025-01-01T00:00:00Z",
+    isArchived: false
   }
 ];
 
@@ -317,6 +328,34 @@ export class DiscountManagementService {
     return true;
   }
 
+  // Archive discount (soft-delete)
+  static archiveDiscount(id: string): boolean {
+    const discounts = this.getAllDiscounts();
+    const idx = discounts.findIndex(d => d.id === id);
+    if (idx === -1) return false;
+    discounts[idx].isArchived = true;
+    discounts[idx].updatedAt = new Date().toISOString();
+    localStorage.setItem(STORAGE_KEY_DISCOUNTS, JSON.stringify(discounts));
+    try {
+      window.dispatchEvent(new CustomEvent('discounts-updated', { detail: { action: 'archive', id } }));
+    } catch (e) {}
+    return true;
+  }
+
+  // Restore (un-archive) discount
+  static restoreDiscount(id: string): boolean {
+    const discounts = this.getAllDiscounts();
+    const idx = discounts.findIndex(d => d.id === id);
+    if (idx === -1) return false;
+    discounts[idx].isArchived = false;
+    discounts[idx].updatedAt = new Date().toISOString();
+    localStorage.setItem(STORAGE_KEY_DISCOUNTS, JSON.stringify(discounts));
+    try {
+      window.dispatchEvent(new CustomEvent('discounts-updated', { detail: { action: 'restore', id } }));
+    } catch (e) {}
+    return true;
+  }
+
   // Toggle discount status
   static toggleDiscountStatus(id: string): Discount | null {
     const discount = this.getDiscountById(id);
@@ -417,6 +456,28 @@ export class DiscountManagementService {
     if (filteredPromotions.length === promotions.length) return false;
     
     localStorage.setItem(STORAGE_KEY_PROMOTIONS, JSON.stringify(filteredPromotions));
+    return true;
+  }
+
+  // Archive promotion (soft-delete)
+  static archivePromotion(id: string): boolean {
+    const promotions = this.getAllPromotions();
+    const idx = promotions.findIndex(p => p.id === id);
+    if (idx === -1) return false;
+    promotions[idx].isArchived = true;
+    promotions[idx].updatedAt = new Date().toISOString();
+    localStorage.setItem(STORAGE_KEY_PROMOTIONS, JSON.stringify(promotions));
+    return true;
+  }
+
+  // Restore (un-archive) promotion
+  static restorePromotion(id: string): boolean {
+    const promotions = this.getAllPromotions();
+    const idx = promotions.findIndex(p => p.id === id);
+    if (idx === -1) return false;
+    promotions[idx].isArchived = false;
+    promotions[idx].updatedAt = new Date().toISOString();
+    localStorage.setItem(STORAGE_KEY_PROMOTIONS, JSON.stringify(promotions));
     return true;
   }
 

@@ -19,20 +19,32 @@ async function safeJson(res: Response) {
 export async function fetchPatients(): Promise<any[]> {
   const res = await fetch(`${API_URL}/patients`);
   const body = await safeJson(res);
-  if (!res.ok || !body?.success) throw new Error(body?.message || "Failed to load patients");
-  return body.data || [];
+  if (!res.ok) throw new Error(body?.message || "Failed to load patients");
+  const data = Array.isArray(body) ? body : (body?.data || []);
+  if (!body?.success && !Array.isArray(body) && !body?.data) {
+    console.warn('fetchPatients: response missing success flag — returning available data (if any)');
+  }
+  return data || [];
 }
 
 export async function fetchInvoices(): Promise<any[]> {
   const res = await fetch(`${API_URL}/invoices`);
   const body = await safeJson(res);
-  if (!res.ok || !body?.success) throw new Error(body?.message || "Failed to load invoices");
-  return body.data || [];
+  if (!res.ok) throw new Error(body?.message || "Failed to load invoices");
+  const data = Array.isArray(body) ? body : (body?.data || []);
+  if (!body?.success && !Array.isArray(body) && !body?.data) {
+    console.warn('fetchInvoices: response missing success flag — returning available data (if any)');
+  }
+  return data || [];
 }
 
 export async function fetchPayments(): Promise<any[]> {
   const res = await fetch(`${API_URL}/payments`);
   const body = await safeJson(res);
-  if (!res.ok || !body?.success) throw new Error(body?.message || "Failed to load payments");
-  return body.data || [];
+  if (!res.ok) throw new Error(body?.message || "Failed to load payments");
+  const data = Array.isArray(body) ? body : (body?.data || []);
+  if (!body?.success && !Array.isArray(body) && !body?.data) {
+    console.warn('fetchPayments: response missing success flag — returning available data (if any)');
+  }
+  return data || [];
 }

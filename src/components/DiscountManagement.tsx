@@ -11,7 +11,7 @@ import { Switch } from "./ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "./ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "./ui/alert-dialog";
-import { toast } from "sonner@2.0.3";
+import { toast } from "sonner";
 import { DiscountManagementService, Discount, Promotion } from "../services/discountManagementService";
 
 interface DiscountManagementProps {
@@ -143,11 +143,12 @@ export function DiscountManagement({ onNavigateToView }: DiscountManagementProps
   const confirmDeleteDiscount = () => {
     if (discountToDelete) {
       try {
-        DiscountManagementService.deleteDiscount(discountToDelete);
+        // Move to archive instead of permanent delete
+        DiscountManagementService.archiveDiscount(discountToDelete);
         loadData();
-        toast.success('Discount deleted successfully');
+        toast.success('Discount moved to archive');
       } catch (error) {
-        toast.error('Failed to delete discount');
+        toast.error('Failed to move discount to archive');
       }
       setDiscountToDelete(null);
     }
@@ -202,11 +203,12 @@ export function DiscountManagement({ onNavigateToView }: DiscountManagementProps
   const confirmDeletePromotion = () => {
     if (promotionToDelete) {
       try {
-        DiscountManagementService.deletePromotion(promotionToDelete);
+        // Move to archive instead of permanent delete
+        DiscountManagementService.archivePromotion(promotionToDelete);
         loadData();
-        toast.success('Promotion deleted successfully');
+        toast.success('Promotion moved to archive');
       } catch (error) {
-        toast.error('Failed to delete promotion');
+        toast.error('Failed to move promotion to archive');
       }
       setPromotionToDelete(null);
     }
@@ -224,6 +226,8 @@ export function DiscountManagement({ onNavigateToView }: DiscountManagementProps
   };
 
   const filteredDiscounts = discounts.filter(discount => {
+    // hide archived discounts from the active list
+    if (discount.isArchived) return false;
     const matchesSearch = 
       discount.code.toLowerCase().includes(searchTerm.toLowerCase()) ||
       discount.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -715,38 +719,38 @@ export function DiscountManagement({ onNavigateToView }: DiscountManagementProps
 
       {/* Delete Discount Confirmation */}
       <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete Discount?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This will permanently delete this discount code. This action cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmDeleteDiscount} className="bg-red-600 hover:bg-red-700">
-              Delete
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Move Discount to Archive?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This will move the discount code to the archive. You can restore it later from the Archive.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={confirmDeleteDiscount} className="bg-red-600 hover:bg-red-700">
+                Move to Archive
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
       </AlertDialog>
 
       {/* Delete Promotion Confirmation */}
       <AlertDialog open={showDeletePromoDialog} onOpenChange={setShowDeletePromoDialog}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete Promotion?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This will permanently delete this promotional campaign. This action cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmDeletePromotion} className="bg-red-600 hover:bg-red-700">
-              Delete
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Move Promotion to Archive?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This will move the promotional campaign to the archive. You can restore it later from the Archive.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={confirmDeletePromotion} className="bg-red-600 hover:bg-red-700">
+                Move to Archive
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
       </AlertDialog>
     </div>
   );

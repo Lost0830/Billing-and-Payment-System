@@ -30,11 +30,13 @@ import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { DiscountService, DiscountOption } from "../services/discountService";
 import { PriceListService } from "../services/priceListService";
 import { toast } from "sonner";
-import { fetchPayments, fetchPatients, fetchInvoices } from "../services/api.js";
+import { fetchPayments, fetchPatients, fetchInvoices, fetchInvoice } from "../services/api.js";
 import { MockEmrService } from "../services/mockEmrData";
 import { UserSession } from "../hooks/useAuth";
 import axios from "axios";
 import { getDisplayPatientId, getInternalPatientKey, normalizePatients, resolvePatientDisplay } from "../utils/patientId";
+import { billingService } from "../services/billingService";
+import { computeInvoiceSubtotal } from "../utils/invoiceUtils";
 
 
 const API_URL = "http://localhost:5000/api";
@@ -80,6 +82,7 @@ const PAYMENT_METHODS = [
 ];
 
 export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
+  // computeInvoiceSubtotal moved to src/utils/invoiceUtils.ts
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('');
   const [showProcessForm, setShowProcessForm] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -126,16 +129,36 @@ export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
 
     const id = p._id || p.id || p.paymentId || "";
     const invoiceNumber = p.invoiceNumber || p.invoiceNo || p.number || p.ref || p.reference || "";
-    const patientName = p.patientName || p.patient || p.name || "";
-    const patientId = p.patientId || p.accountId || p.patient_id || "";
-    const amount = Number(p.amount ?? p.total ?? p.paymentAmount ?? p.paid ?? 0);
-    const subtotal = Number(p.subtotal ?? p.amount ?? p.total ?? 0);
-    const discount = Number(p.discount ?? p.discountAmount ?? 0);
-    const tax = Number(p.tax ?? 0);
+    // Try to extract patient info from several possible shapes
+    let patientName = p.patientName || p.patient || p.name || "";
+    let patientId = p.patientId || p.accountId || p.patient_id || "";
+    // If payment embeds a patient object, use its friendly id or internal id
+    const embeddedPatient = (p.patient && typeof p.patient === 'object') ? p.patient : (p.patientInfo && typeof p.patientInfo === 'object' ? p.patientInfo : null);
+    if (embeddedPatient) {
+      try {
+        const disp = getDisplayPatientId(embeddedPatient);
+        const internal = getInternalPatientKey(embeddedPatient);
+        if (disp && disp !== "") patientId = disp;
+        else if (internal && internal !== "") patientId = internal;
+        // prefer embedded name if present
+        patientName = patientName || embeddedPatient.name || `${embeddedPatient.firstName || ''} ${embeddedPatient.lastName || ''}`.trim();
+      } catch (e) { /* ignore */ }
+    }
+    const amount = Number(p.amount ?? p.total ?? p.paymentAmount ?? p.paid ?? 0) || 0;
+    const subtotal = Number(p.subtotal ?? p.amount ?? p.total ?? 0) || 0;
+    const discount = Number(p.discount ?? p.discountAmount ?? 0) || 0;
+    const tax = Number(p.tax ?? 0) || 0;
     const method = p.method || p.paymentMethod || "";
-    const status = (p.status || "completed").toString();
-    const date = p.paymentDate || p.date || p.createdAt || new Date().toISOString();
-    const time = p.time || (p.createdAt ? new Date(p.createdAt).toLocaleTimeString() : "");
+  const status = (p.status || "completed").toString().toLowerCase();
+    // Normalize date/time to ISO string for consistent sorting & display
+    let rawDate = p.paymentDate || p.date || p.createdAt || new Date().toISOString();
+    try {
+      rawDate = (rawDate instanceof Date) ? rawDate.toISOString() : (new Date(rawDate)).toISOString();
+    } catch (e) {
+      rawDate = new Date().toISOString();
+    }
+    const date = rawDate;
+    const time = p.time || (date ? new Date(date).toLocaleTimeString() : "");
     const reference = p.reference || p.ref || "";
     const items = Array.isArray(p.items) ? p.items : (Array.isArray(p.lines) ? p.lines : []);
 
@@ -144,8 +167,8 @@ export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
       id,
       invoiceNumber,
       patientName,
-      patientId,
-      amount,
+  patientId,
+  amount,
       subtotal,
       discount,
       tax,
@@ -227,7 +250,14 @@ export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
           if (found) p.patientId = getDisplayPatientId(found) || getInternalPatientKey(found) || p.patientId;
           return p;
         });
-        setPayments(mapped.map((p:any)=>normalizePayment(p)));
+        // normalize and sort by newest first
+        const normalizedArr: Payment[] = mapped.map((p:any)=>normalizePayment(p));
+        normalizedArr.sort((a,b) => {
+          const ta = new Date(a.date || a.createdAt || 0).getTime();
+          const tb = new Date(b.date || b.createdAt || 0).getTime();
+          return tb - ta;
+        });
+        setPayments(normalizedArr);
         return;
       }
   const res = await axios.get(`${API_URL}/payments`);
@@ -239,7 +269,14 @@ export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
         if (found) p.patientId = getDisplayPatientId(found) || getInternalPatientKey(found) || p.patientId;
         return p;
       });
-      setPayments(mapped.map((p:any)=>normalizePayment(p)));
+      // normalize and sort by newest first
+      const normalizedArr: Payment[] = mapped.map((p:any)=>normalizePayment(p));
+      normalizedArr.sort((a,b) => {
+        const ta = new Date(a.date || a.createdAt || 0).getTime();
+        const tb = new Date(b.date || b.createdAt || 0).getTime();
+        return tb - ta;
+      });
+      setPayments(normalizedArr);
     } catch (err) {
       console.error("Error fetching payments", err);
       setPayments([]);
@@ -274,7 +311,13 @@ export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
   useEffect(() => {
     const load = async () => {
       try {
-        await Promise.all([fetchPaymentsFromDb(), fetchInvoicesFromDb(), fetchPatientsFromDb()]);
+        // Respect global suppression: if remote sync is suppressed, avoid fetching invoices/payments
+        if (billingService.isRemoteSyncSuppressed && billingService.isRemoteSyncSuppressed()) {
+          // still fetch patients, but also try to fetch a single invoice if a handoff key exists
+          await fetchPatientsFromDb();
+        } else {
+          await Promise.all([fetchPaymentsFromDb(), fetchInvoicesFromDb(), fetchPatientsFromDb()]);
+        }
       } catch (e) {
         console.error("PaymentProcessing load error", e);
       }
@@ -287,6 +330,39 @@ export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
       if (pre) {
         setInitialSelectedInvoice(pre);
         setShowProcessForm(true);
+        // attempt to fetch the invoice immediately so it appears even when invoice list fetch is suppressed
+              try {
+                (async () => {
+                  try {
+                    const maybe = await fetchInvoice(String(pre));
+                    if (maybe) {
+                      const item = Array.isArray(maybe) ? maybe[0] : (maybe?.data ? maybe.data : maybe);
+                      if (item) setAvailableInvoices(prev => {
+                        const exists = prev.find(i => (i._id && (i._id === (item._id || item.id))) || (i.id && i.id === (item._id || item.id)) || (i.number && (i.number === item.number || i.number === String(pre))));
+                        if (exists) return prev;
+                        return [item, ...prev];
+                      });
+                      return;
+                    }
+                  } catch (e) {
+                    // fetchInvoice may fail if backend returns non-standard shape or not found; fallback to fetching list
+                  }
+
+                  try {
+                    const res = await axios.get(`${API_URL}/invoices`);
+                    const payload: any = res?.data;
+                    const arr = Array.isArray(payload) ? payload : (payload?.data || []);
+                    if (arr && arr.length > 0) {
+                      const match = arr.find((inv:any) => String(inv._id) === String(pre) || String(inv.id) === String(pre) || String(inv.number) === String(pre) || String(inv.invoiceNumber) === String(pre));
+                      if (match) setAvailableInvoices(prev => {
+                        const exists = prev.find(i => (i._id && i._id === (match._id || match.id)) || (i.id && i.id === (match._id || match.id)) || (i.number && (i.number === match.number || i.number === String(pre))));
+                        if (exists) return prev;
+                        return [match, ...prev];
+                      });
+                    }
+                  } catch (e) { /* ignore fallback errors */ }
+                })();
+              } catch (e) { /* ignore */ }
         // remove immediately to avoid re-triggering later
         try { window.localStorage.removeItem('selectedInvoiceForProcessing'); } catch(e) {}
         try { window.localStorage.removeItem('selectedInvoiceForProcessingNumber'); } catch(e) {}
@@ -305,6 +381,40 @@ export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
           if (key) {
             setInitialSelectedInvoice(String(key));
             setShowProcessForm(true);
+            // Try to fetch the invoice directly so PaymentProcessing can show it even when
+            // remote billing sync is suppressed (e.g., after clearing local records)
+              try {
+                (async () => {
+                  try {
+                    const maybe = await fetchInvoice(String(key));
+                    if (maybe) {
+                      const item = Array.isArray(maybe) ? maybe[0] : (maybe?.data ? maybe.data : maybe);
+                      if (item) setAvailableInvoices(prev => {
+                        const existing = prev.find(i => (i._id && (i._id === (item._id || item.id))) || (i.id && i.id === (item._id || item.id)) || (i.number && (i.number === item.number || i.number === String(key))));
+                        if (existing) return prev;
+                        return [item, ...prev];
+                      });
+                      return;
+                    }
+                  } catch (e) {
+                    // ignore and try fallback
+                  }
+
+                  try {
+                    const res = await axios.get(`${API_URL}/invoices`);
+                    const payload: any = res?.data;
+                    const arr = Array.isArray(payload) ? payload : (payload?.data || []);
+                    if (arr && arr.length > 0) {
+                      const match = arr.find((inv:any) => String(inv._id) === String(key) || String(inv.id) === String(key) || String(inv.number) === String(key) || String(inv.invoiceNumber) === String(key));
+                      if (match) setAvailableInvoices(prev => {
+                        const exists = prev.find(i => (i._id && i._id === (match._id || match.id)) || (i.id && i.id === (match._id || match.id)) || (i.number && (i.number === match.number || i.number === String(key))));
+                        if (exists) return prev;
+                        return [match, ...prev];
+                      });
+                    }
+                  } catch (e) { /* ignore fallback errors */ }
+                })();
+              } catch (e) { /* ignore */ }
             // ensure localStorage is also set so the existing flow can pick it up
             try { window.localStorage.setItem('selectedInvoiceForProcessing', String(key)); } catch (e) {}
             try { window.localStorage.setItem('selectedInvoiceForProcessingNumber', String(d.invoiceNumber || d.invoiceNo || d.number || key)); } catch (e) {}
@@ -360,15 +470,7 @@ export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
       setSelectedInvoiceNumber(invoiceId);
       setNewPayment(prev => ({ ...prev, invoiceNumber: invoiceId, patientName, patientId }));
 
-      const computeSubtotal = (inv:any) => {
-        if (inv == null) return 0;
-        if (inv.subtotal !== undefined && inv.subtotal !== null) return Number(inv.subtotal);
-        if (inv.amount !== undefined && inv.amount !== null) return Number(inv.amount);
-        if (Array.isArray(inv.items) && inv.items.length > 0) return inv.items.reduce((s:number,it:any) => s + Number(it.totalPrice ?? it.amount ?? it.price ?? 0), 0);
-        if (Array.isArray(inv.lines) && inv.lines.length > 0) return inv.lines.reduce((s:number,it:any) => s + Number(it.totalPrice ?? it.amount ?? it.price ?? 0), 0);
-        return 0;
-      };
-      const subtotalVal = computeSubtotal(invoice);
+        const subtotalVal = computeInvoiceSubtotal(invoice);
       if (subtotalVal && subtotalVal > 0) {
         setSubtotalAmount(String(subtotalVal));
         setNewPayment(prev => ({ ...prev, amount: String(subtotalVal) }));
@@ -647,6 +749,26 @@ export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
       setPayments(prev => [normalized, ...prev]);
       setProcessedPayment(normalized);
 
+      // push into local billingService so other modules (BillingHistory) receive immediate updates
+      try {
+        billingService.addPaymentRecord({
+          invoiceNumber: normalized.invoiceNumber || '',
+          patientName: normalized.patientName || '',
+          patientId: normalized.patientId || '',
+          amount: Number(normalized.amount) || 0,
+          method: normalized.method || '',
+          reference: normalized.reference || normalized.ref || '',
+          date: normalized.date || new Date().toISOString(),
+          time: normalized.time || (normalized.date ? new Date(normalized.date).toLocaleTimeString() : undefined),
+          status: (normalized.status as any) || 'completed'
+        });
+      } catch (e) {
+        console.warn('billingService.addPaymentRecord failed', e);
+      }
+
+      // notify other windows/components that billing changed
+      try { window.dispatchEvent(new CustomEvent('billing-updated', { detail: { source: 'payment-processing', id: normalized.id || normalized._id } })); } catch (e) {}
+
       // refresh lists
       await fetchPaymentsFromDb();
       await fetchInvoicesFromDb();
@@ -810,7 +932,7 @@ const isTaxableItem = (item: any): boolean => {
       {/* Quick Stats */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <Card><CardContent className="p-4"><div className="flex items-center justify-between">
-          <div><p className="text-sm text-gray-600">Total Payments</p><p className="text-2xl font-bold">₱{totalAmount.toLocaleString()}</p></div>
+          <div><p className="text-sm text-gray-600">Total Payments</p><p className="text-2xl font-bold">₱{Number(totalAmount || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p></div>
           <Receipt className="text-[#358E83]" size={32} />
         </div></CardContent></Card>
 
@@ -881,11 +1003,17 @@ const isTaxableItem = (item: any): boolean => {
                           {getMethodIcon(payment.method)}
                           <div>
                             <h4 className="font-semibold">{payment.invoiceNumber}</h4>
-                            <p className="text-sm text-gray-600">{resolvePatientDisplay(patients, payment.patientId || payment.id || payment._id)}</p>
+                            <p className="text-sm text-gray-600">{(() => {
+                              const resolved = resolvePatientDisplay(patients, payment.patientId || payment.id || payment._id);
+                              if (resolved && resolved !== 'N/A') return resolved;
+                              // fallback to embedded patientName if resolve failed
+                              if (payment.patientName && String(payment.patientName).trim() !== '') return `${payment.patientName}`;
+                              return 'N/A';
+                            })()}</p>
                           </div>
                         </div>
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-                          <div><p className="text-gray-500">Amount</p><p className="font-semibold">₱{payment.amount.toLocaleString()}</p></div>
+                          <div><p className="text-gray-500">Amount</p><p className="font-semibold">₱{Number(payment.amount || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p></div>
                           <div><p className="text-gray-500">Method</p><p className="font-medium capitalize">{payment.method}</p></div>
                           <div><p className="text-gray-500">Date & Time</p><p className="font-medium">{new Date(payment.date).toLocaleDateString('en-PH')} {payment.time}</p></div>
                           <div><p className="text-gray-500">Reference</p><p className="font-medium">{payment.reference}</p></div>
@@ -930,8 +1058,9 @@ const isTaxableItem = (item: any): boolean => {
                     <Button variant="outline" role="combobox" aria-expanded={openInvoiceCombobox} className="w-full justify-between">
                       {(() => {
                         const sel = availableInvoices.find((inv) => inv.number === selectedInvoiceNumber || inv.invoiceNumber === selectedInvoiceNumber || inv._id === selectedInvoiceNumber);
-                        if (sel) {
-                          const amt = (typeof sel.amount === 'number') ? sel.amount.toLocaleString() : (sel.amount ? String(sel.amount) : '0.00');
+              if (sel) {
+                const amtNum = computeInvoiceSubtotal(sel) || 0;
+                const amt = amtNum.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
                           const pname = sel.patientName || sel.patient || '';
                           const num = sel.number || sel.invoiceNumber || sel._id || '';
                           return `${num} - ${pname} (₱${amt})`;
@@ -970,15 +1099,7 @@ const isTaxableItem = (item: any): boolean => {
                                 }));
 
                                 // compute subtotal: prefer explicit subtotal/amount, otherwise derive from items
-                                const computeSubtotal = (inv:any) => {
-                                  if (inv == null) return 0;
-                                  if (inv.subtotal !== undefined && inv.subtotal !== null) return Number(inv.subtotal);
-                                  if (inv.amount !== undefined && inv.amount !== null) return Number(inv.amount);
-                                  if (Array.isArray(inv.items) && inv.items.length > 0) return inv.items.reduce((s:number,it:any) => s + Number(it.totalPrice ?? it.amount ?? it.price ?? 0), 0);
-                                  if (Array.isArray(inv.lines) && inv.lines.length > 0) return inv.lines.reduce((s:number,it:any) => s + Number(it.totalPrice ?? it.amount ?? it.price ?? 0), 0);
-                                  return 0;
-                                };
-                                const subtotalVal = computeSubtotal(invoice);
+                                const subtotalVal = computeInvoiceSubtotal(invoice);
                                 if (subtotalVal && subtotalVal > 0) {
                                   setSubtotalAmount(String(subtotalVal));
                                   setNewPayment(prev => ({ ...prev, amount: String(subtotalVal) }));
@@ -1002,8 +1123,8 @@ const isTaxableItem = (item: any): boolean => {
                               <div>
                                 <div className="font-medium">{invoice.number || invoice.invoiceNumber || invoice.id || 'N/A'}</div>
                 <div className="text-sm text-gray-500">
-                  {invoice.patientName || (invoice.patient && (typeof invoice.patient === 'string' ? invoice.patient : invoice.patient.name))} ({resolvePatientDisplay(patients, invoice.patientId || invoice.patient || invoice.accountId)}) - ₱{(() => {
-                                    const sub = (invoice.subtotal !== undefined && invoice.subtotal !== null) ? Number(invoice.subtotal) : (invoice.amount !== undefined && invoice.amount !== null ? Number(invoice.amount) : (Array.isArray(invoice.items) ? invoice.items.reduce((s:number,it:any)=> s + Number(it.totalPrice ?? it.amount ?? it.price ?? 0), 0) : 0));
+                                  {invoice.patientName || (invoice.patient && (typeof invoice.patient === 'string' ? invoice.patient : invoice.patient.name))} ({resolvePatientDisplay(patients, invoice.patientId || invoice.patient || invoice.accountId)}) - ₱{(() => {
+                                    const sub = computeInvoiceSubtotal(invoice) || 0;
                                     return sub.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
                                   })()}
                                 </div>
@@ -1029,123 +1150,7 @@ const isTaxableItem = (item: any): boolean => {
               </div>
             </div>
 
-            {/* EMR / Medicines preview for cashier */}
-            {emrData && (
-              <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h4 className="font-medium">EMR Items Preview</h4>
-                    <p className="text-sm text-gray-600">Showing unbilled services and pharmacy items from the integrated EMR/mock data.</p>
-                  </div>
-                  <Badge className="bg-green-100 text-green-800">{emrData.status}</Badge>
-                </div>
-
-                <div className="flex items-start justify-between">
-                  <div>
-                    <h4 className="font-medium text-sm">EMR Items Preview</h4>
-                    <p className="text-xs text-gray-500">Review unbilled services and medicines before adding to invoice</p>
-                  </div>
-                  <div>
-                    <Button size="sm" onClick={() => {
-                      try {
-                        const key = newPayment.patientId || '';
-                        const data = MockEmrService.getPatientEmrData(key);
-                        if (data) {
-                          const items = [ ...(data.services || []).map((s:any, idx:number) => ({
-                            id: `emr-${s.serviceId}-${Date.now()}-${idx}`,
-                            description: s.service,
-                            quantity: s.quantity || 1,
-                            rate: PriceListService.getPrice ? PriceListService.getPrice(s.service, s.category) : 0,
-                            amount: (s.quantity || 1) * (PriceListService.getPrice ? PriceListService.getPrice(s.service, s.category) : 0),
-                            category: s.category || 'Consultation'
-                          })),
-                          ...(data.medicines || []).map((m:any, idx:number) => ({
-                            id: `emr-m-${m.medicineId || idx}-${Date.now()}`,
-                            description: m.name,
-                            quantity: m.quantity || 1,
-                            rate: PriceListService.getPrice ? PriceListService.getPrice(m.name, 'Pharmacy') : 0,
-                            amount: (m.quantity || 1) * (PriceListService.getPrice ? PriceListService.getPrice(m.name, 'Pharmacy') : 0),
-                            category: 'Pharmacy'
-                          }))];
-                          window.dispatchEvent(new CustomEvent('emr-add-to-invoice', { detail: { patientId: key, items } }));
-                          toast.success(`Added ${items.length} EMR items to invoice form`);
-                        } else {
-                          toast.info('No EMR items to add');
-                        }
-                      } catch (e) { console.error(e); toast.error('Failed to add EMR items'); }
-                    }}>
-                      Add All to Invoice
-                    </Button>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
-                  <div>
-                    <p className="text-sm text-gray-500 mb-2">Services</p>
-                    <div className="space-y-2">
-                      {(emrData.services || []).map((s: any, idx: number) => {
-                        const rate = PriceListService.getPrice ? PriceListService.getPrice(s.service, s.category) : 0;
-                        const invItem = {
-                          id: `emr-${s.serviceId}-${Date.now()}-${idx}`,
-                          description: s.service,
-                          quantity: s.quantity || 1,
-                          rate,
-                          amount: (s.quantity || 1) * (rate || 0),
-                          category: s.category || 'Consultation'
-                        };
-                        return (
-                          <div key={`emr-s-${idx}`} className="p-2 border rounded bg-white flex items-start justify-between">
-                            <div>
-                              <div className="font-medium">{s.service}</div>
-                              <div className="text-xs text-gray-500">{s.category} • {s.quantity} • {s.date}</div>
-                              {s.notes && <div className="text-xs text-gray-600 mt-1">{s.notes}</div>}
-                            </div>
-                            <div className="ml-3">
-                              <Button size="sm" onClick={() => { try { window.dispatchEvent(new CustomEvent('emr-add-to-invoice', { detail: { patientId: newPayment.patientId || '', items: [invItem] } })); toast.success('Added EMR service to invoice form'); } catch (e) { console.error(e); toast.error('Failed to add item'); } }}>
-                                Add
-                              </Button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                      {(!emrData.services || emrData.services.length === 0) && <div className="text-sm text-gray-500">No EMR services</div>}
-                    </div>
-                  </div>
-
-                  <div>
-                    <p className="text-sm text-gray-500 mb-2">Medicines</p>
-                    <div className="space-y-2">
-                      {((emrData.medicines) || []).map((m: any, idx: number) => {
-                        const rate = PriceListService.getPrice ? PriceListService.getPrice(m.name, 'Pharmacy') : 0;
-                        const invItem = {
-                          id: `emr-m-${m.medicineId || idx}-${Date.now()}`,
-                          description: m.name,
-                          quantity: m.quantity || 1,
-                          rate,
-                          amount: (m.quantity || 1) * (rate || 0),
-                          category: 'Pharmacy'
-                        };
-                        return (
-                          <div key={`emr-m-${idx}`} className="p-2 border rounded bg-white flex items-start justify-between">
-                            <div>
-                              <div className="font-medium">{m.name}</div>
-                              <div className="text-xs text-gray-500">{m.strength || m.form || ''} • Qty: {m.quantity} • {m.datePrescribed || m.date}</div>
-                              {m.instructions && <div className="text-xs text-gray-600 mt-1">{m.instructions}</div>}
-                            </div>
-                            <div className="ml-3">
-                              <Button size="sm" onClick={() => { try { window.dispatchEvent(new CustomEvent('emr-add-to-invoice', { detail: { patientId: newPayment.patientId || '', items: [invItem] } })); toast.success('Added EMR medicine to invoice form'); } catch (e) { console.error(e); toast.error('Failed to add medicine'); } }}>
-                                Add
-                              </Button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                      {(!emrData.medicines || emrData.medicines.length === 0) && <div className="text-sm text-gray-500">No EMR medicines</div>}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
+            {/* EMR preview moved to InvoiceGeneration — kept out of payment flow to avoid duplication */}
 
             {/* Discount & breakdown */}
             {subtotalAmount && subtotalAmount !== "" && (
@@ -1333,36 +1338,39 @@ const isTaxableItem = (item: any): boolean => {
           <div id="payment-receipt-print" className="space-y-6 print:p-8">
             {processedPayment ? (
               <>
-                <div className="text-center border-b pb-4">
-                  <h2 className="text-2xl font-bold text-[#358E83]">MediCare Hospital</h2>
-                  <p className="text-sm text-gray-600">123 Health Street, Medical District, Philippines</p>
-                  <p className="text-sm text-gray-600">Tel: (02) 1234-5678 | Email: billing@medicare.ph</p>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-b pb-4">
                   <div>
-                    <p className="text-sm text-gray-600">Invoice Number:</p>
-                    <p className="font-semibold">{processedPayment.invoiceNumber}</p>
+                    <h2 className="text-2xl font-bold text-[#358E83]">MediCare Hospital</h2>
+                    <p className="text-sm text-gray-600">123 Health Street, Medical District, Philippines</p>
+                    <p className="text-sm text-gray-600">Tel: (02) 1234-5678 | Email: billing@medicare.ph</p>
                   </div>
-                  <div>
-                    <p className="text-sm text-gray-600">Date Issued:</p>
-                    <p className="font-semibold">{formatIssuedDate(processedPayment)}</p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-600">Patient Name:</p>
-                    <p className="font-semibold">{processedPayment.patientName}</p>
-                  </div>
+                  <div className="text-sm">
+                    <div className="mb-2">
+                      <p className="text-gray-600 text-xs">Invoice Number</p>
+                      <p className="font-semibold">{processedPayment.invoiceNumber}</p>
+                    </div>
+                    <div className="mb-2">
+                      <p className="text-gray-600 text-xs">Date Issued</p>
+                      <p className="font-semibold">{formatIssuedDate(processedPayment)}</p>
+                    </div>
+                    <div className="mb-2">
+                      <p className="text-gray-600 text-xs">Patient</p>
+                      <p className="font-semibold">{processedPayment.patientName}</p>
+                    </div>
+                    <div className="mb-2">
+                      <p className="text-gray-600 text-xs">Patient ID</p>
+                      <p className="font-semibold">{resolvePatientDisplay(patients, processedPayment?.patientId || processedPayment?.id || processedPayment?._id)}</p>
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
                       <div>
-                    <p className="text-sm text-gray-600">Patient ID:</p>
-                    <p className="font-semibold">{resolvePatientDisplay(patients, processedPayment?.patientId || processedPayment?.id || processedPayment?._id)}</p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-600">Age / Sex:</p>
-                    <p className="font-semibold">{getDemographicsForPayment(processedPayment).age} / {getDemographicsForPayment(processedPayment).sex}</p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-600">Payment Status:</p>
-                    <Badge className={getStatusColor(processedPayment.status)}>{(processedPayment.status || 'paid').toUpperCase()}</Badge>
+                        <p className="text-gray-600 text-xs">Age / Sex</p>
+                        <p className="font-semibold">{getDemographicsForPayment(processedPayment).age} / {getDemographicsForPayment(processedPayment).sex}</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-600 text-xs">Status</p>
+                        <Badge className={getStatusColor(processedPayment.status)}>{(processedPayment.status || 'paid').toUpperCase()}</Badge>
+                      </div>
+                    </div>
                   </div>
                 </div>
 

@@ -30,7 +30,7 @@ import {
   Send,
   Loader2,
 } from "lucide-react";
-import { toast } from "sonner@2.0.3";
+import { toast } from "sonner";
 
 interface User {
   id: string;
@@ -131,7 +131,8 @@ export function UserManagement({ onNavigateToView }: UserManagementProps) {
         id: (u._id && String(u._id)) || (u.id && String(u.id)) || String(Date.now() + idx),
         name: u.name || u.fullName || u.displayName || (u.email ? u.email.split('@')[0] : 'Unknown'),
         email: u.email || '',
-        role: u.role === 'Admin' ? 'Admin' : 'Cashier',
+        // Normalize role coming from backend which stores roles lowercased (e.g. 'admin')
+        role: (u.role && (typeof u.role === 'string') && u.role.toLowerCase() === 'admin') ? 'Admin' : 'Cashier',
         status: u.status === 'Inactive' ? 'Inactive' : 'Active',
         lastLogin: u.lastLogin || 'Never',
         createdAt: u.createdAt ? new Date(u.createdAt).toISOString().split('T')[0] : (u.createdAt || new Date().toISOString().split('T')[0]),
@@ -182,7 +183,7 @@ export function UserManagement({ onNavigateToView }: UserManagementProps) {
           id: (created._id && String(created._id)) || (created.id && String(created.id)) || String(Date.now()),
           name: created.name || payload.name,
           email: created.email || payload.email,
-          role: (created.role && (created.role === 'admin' ? 'Admin' : 'Cashier')) || (payload.role === 'admin' ? 'Admin' : 'Cashier'),
+          role: (created.role && (typeof created.role === 'string') && created.role.toLowerCase() === 'admin' ? 'Admin' : 'Cashier') || (payload.role === 'admin' ? 'Admin' : 'Cashier'),
           status: created.status || 'Active',
           lastLogin: created.lastLogin || 'Never',
           createdAt: created.createdAt ? new Date(created.createdAt).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
@@ -232,7 +233,7 @@ export function UserManagement({ onNavigateToView }: UserManagementProps) {
           id: (updated._id && String(updated._id)) || (updated.id && String(updated.id)) || selectedUser.id,
           name: updated.name || selectedUser.name,
           email: updated.email || selectedUser.email,
-          role: (updated.role && (updated.role === 'admin' ? 'Admin' : 'Cashier')) || selectedUser.role,
+          role: (updated.role && (typeof updated.role === 'string') && updated.role.toLowerCase() === 'admin' ? 'Admin' : 'Cashier') || selectedUser.role,
           status: updated.status || selectedUser.status,
           lastLogin: updated.lastLogin || selectedUser.lastLogin,
           createdAt: updated.createdAt ? new Date(updated.createdAt).toISOString().split('T')[0] : selectedUser.createdAt,
@@ -296,7 +297,8 @@ export function UserManagement({ onNavigateToView }: UserManagementProps) {
     setDeletingIds(prev => [...prev, userId]);
 
     try {
-      const res = await fetch(`/api/users/${userId}`, { method: 'DELETE' });
+      // Move user to archive instead of permanent delete
+      const res = await fetch(`/api/archive/users/${userId}/archive`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ archivedBy: 'admin' }) });
       const text = await res.text();
       const contentType = (res.headers.get('content-type') || '').toLowerCase();
 
@@ -310,10 +312,10 @@ export function UserManagement({ onNavigateToView }: UserManagementProps) {
         try { body = JSON.parse(text); } catch (e) { /* ignore */ }
       }
 
-      toast.success(body?.message || 'User deleted successfully');
+      toast.success(body?.message || 'User moved to archive');
     } catch (err: any) {
       setUsers(previous);
-      toast.error(err?.message || 'Failed to delete user');
+      toast.error(err?.message || 'Failed to move user to archive');
     } finally {
       setDeletingIds(prev => prev.filter(id => id !== userId));
       setDeleteTarget(null);
@@ -780,9 +782,9 @@ export function UserManagement({ onNavigateToView }: UserManagementProps) {
       <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Confirm Delete</DialogTitle>
+            <DialogTitle>Move User to Archive?</DialogTitle>
             <DialogDescription>
-              Are you sure you want to permanently delete this user? This action cannot be undone.
+              Are you sure you want to move this user to the archive? You can restore the user later from the Archive.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -798,9 +800,9 @@ export function UserManagement({ onNavigateToView }: UserManagementProps) {
             </div>
             <div className="flex justify-end space-x-2 pt-4">
               <Button variant="outline" onClick={() => setIsDeleteDialogOpen(false)}>Cancel</Button>
-              <Button className="bg-red-600 hover:bg-red-700" onClick={() => deleteTarget && performDelete(deleteTarget.id)}>
-                Delete
-              </Button>
+                <Button className="bg-red-600 hover:bg-red-700" onClick={() => deleteTarget && performDelete(deleteTarget.id)}>
+                  Move to Archive
+                </Button>
             </div>
           </div>
         </DialogContent>

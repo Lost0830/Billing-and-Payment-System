@@ -16,7 +16,10 @@ import {
   Receipt
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { fetchInvoices, fetchPayments } from "../services/api.js";
+import { fetchInvoices, fetchPayments, fetchPatients } from "../services/api.js";
+import { billingService } from "../services/billingService";
+import { emrService } from "../services/emrIntegration";
+import { DiscountManagementService } from "../services/discountManagementService";
 
 interface DashboardProps {
   onNavigateToModule: (moduleId: string) => void;
@@ -28,6 +31,10 @@ export function Dashboard({ onNavigateToModule }: DashboardProps) {
   const [dueThisWeek, setDueThisWeek] = useState<number>(0);
   const [processedPayments, setProcessedPayments] = useState<number>(0);
   const [recentActivity, setRecentActivity] = useState<any[]>([]);
+  const [totalPatients, setTotalPatients] = useState<number | null>(null);
+  const [revenueMTD, setRevenueMTD] = useState<number>(0);
+  const [appointmentsToday, setAppointmentsToday] = useState<number | null>(null);
+  const [totalUsers, setTotalUsers] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -41,77 +48,197 @@ export function Dashboard({ onNavigateToModule }: DashboardProps) {
     return 0;
   };
 
-  useEffect(() => {
-    const load = async () => {
-      setLoading(true);
-      setError(null);
+  // refreshDashboard can be called by event handlers to immediately refresh metrics
+  const refreshDashboard = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      // Live counts: patients and users
       try {
-        const [invoices, payments] = await Promise.all([fetchInvoices(), fetchPayments()]);
-        console.debug("Dashboard invoices:", invoices);
-        console.debug("Dashboard payments:", payments);
+        const patients = await fetchPatients();
+        setTotalPatients(Array.isArray(patients) ? patients.length : null);
+      } catch (e) { console.warn('Failed to fetch patients for dashboard', e); }
 
-        // Total revenue today from payments (look for paymentDate/date/createdAt)
-        const startOfToday = new Date(); startOfToday.setHours(0,0,0,0);
-        const endOfToday = new Date(); endOfToday.setHours(23,59,59,999);
-        const revenueToday = payments.reduce((sum: number, p: any) => {
-          const d = new Date(p.paymentDate || p.date || p.createdAt || p.updatedAt || null);
-          if (!isNaN(d.getTime()) && d >= startOfToday && d <= endOfToday) {
-            return sum + asNumber(p);
-          }
-          return sum;
-        }, 0);
-        setTotalRevenueToday(revenueToday);
+      try {
+        const uRes = await fetch('/api/users');
+        if (uRes.ok) {
+          const uBody = await uRes.json();
+          setTotalUsers(Array.isArray(uBody.data) ? uBody.data.length : (uBody.count || null));
+        }
+      } catch (e) { console.warn('Failed to fetch users for dashboard', e); }
 
-        // Pending invoices count (flexible field names)
-        const pending = invoices.filter((i: any) => {
-          const st = (i.status || i.state || "").toString().toLowerCase();
-          return ["pending", "unpaid", "draft", "overdue"].includes(st);
-        }).length;
-        setPendingInvoices(pending);
+      // Discounts/promotions stats from client-side service
+      try { DiscountManagementService.getStatistics(); } catch (e) { /* ignore */ }
 
-        // Due this week: invoices with dueDate/due within next 7 days
-        const now = new Date();
-        const weekLater = new Date(); weekLater.setDate(now.getDate() + 7);
-        const due = invoices.filter((i: any) => {
-          const d = new Date(i.dueDate || i.due || i.due_at || i.date || i.createdAt || null);
-          return !isNaN(d.getTime()) && d >= now && d <= weekLater;
-        }).length;
-        setDueThisWeek(due);
+      // Appointments from EMR (mocked)
+      try {
+        const appts = await emrService.getAppointments();
+        const todayStr = new Date().toISOString().split('T')[0];
+        const todayCount = appts.filter((a: any) => (a.appointmentDate || '').toString().startsWith(todayStr)).length;
+        setAppointmentsToday(todayCount);
+      } catch (e) { console.warn('Failed to fetch appointments for dashboard', e); setAppointmentsToday(null); }
 
-        // Processed payments count (paid/completed/processed)
-        const processed = payments.filter((p: any) => {
-          const st = (p.status || p.state || "").toString().toLowerCase();
-          return ["paid", "completed", "processed"].includes(st);
-        }).length;
-        setProcessedPayments(processed);
-
-        // recent activity: merge invoices + payments, sort by date desc
-        const activity = [
-          ...invoices.map((i: any) => ({
-            type: "invoice",
-            id: i._id || i.id,
-            label: i.number || i.invoiceNumber || i.patientName || i.name || ("Invoice " + (i._id || i.id)),
-            status: i.status || i.state,
-            date: i.dueDate || i.date || i.createdAt
-          })),
-          ...payments.map((p: any) => ({
-            type: "payment",
-            id: p._id || p.id,
-            label: p.invoiceNumber || p.reference || p.patientName || ("Payment " + (p._id || p.id)),
-            status: p.status || p.state,
-            date: p.paymentDate || p.date || p.createdAt
-          }))
-        ].filter(a => a.date).sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0,8);
-        setRecentActivity(activity);
-      } catch (e: any) {
-        console.error("Dashboard load error:", e);
-        setError(e.message || "Failed to load dashboard data");
-      } finally {
-        setLoading(false);
+      let invoices: any[] = [];
+      let payments: any[] = [];
+      if (!billingService.isRemoteSyncSuppressed()) {
+        [invoices, payments] = await Promise.all([fetchInvoices(), fetchPayments()]);
+      } else {
+        invoices = [];
+        payments = [];
       }
-    };
-    load();
+
+      // Total revenue today from payments
+      const startOfToday = new Date(); startOfToday.setHours(0,0,0,0);
+      const endOfToday = new Date(); endOfToday.setHours(23,59,59,999);
+      const revenueToday = payments.reduce((sum: number, p: any) => {
+        const d = new Date(p.paymentDate || p.date || p.createdAt || p.updatedAt || null);
+        if (!isNaN(d.getTime()) && d >= startOfToday && d <= endOfToday) {
+          return sum + asNumber(p);
+        }
+        return sum;
+      }, 0);
+      setTotalRevenueToday(revenueToday);
+
+      // Revenue MTD
+      const now = new Date();
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      const revenueMTDVal = payments.reduce((sum: number, p: any) => {
+        const d = new Date(p.paymentDate || p.date || p.createdAt || null);
+        if (!isNaN(d.getTime()) && d >= monthStart && d <= now) return sum + asNumber(p);
+        return sum;
+      }, 0);
+      setRevenueMTD(revenueMTDVal);
+
+      // Pending invoices count
+      const pending = invoices.filter((i: any) => {
+        const st = (i.status || i.state || "").toString().toLowerCase();
+        return ["pending", "unpaid", "draft", "overdue"].includes(st);
+      }).length;
+      setPendingInvoices(pending);
+
+      // Due this week
+      const weekLater = new Date(); weekLater.setDate(now.getDate() + 7);
+      const due = invoices.filter((i: any) => {
+        const d = new Date(i.dueDate || i.due || i.due_at || i.date || i.createdAt || null);
+        return !isNaN(d.getTime()) && d >= now && d <= weekLater;
+      }).length;
+      setDueThisWeek(due);
+
+      // Processed payments count
+      const processed = payments.filter((p: any) => {
+        const st = (p.status || p.state || "").toString().toLowerCase();
+        return ["paid", "completed", "processed"].includes(st);
+      }).length;
+      setProcessedPayments(processed);
+
+      // recent activity
+      const activity = [
+        ...invoices.map((i: any) => ({
+          type: "invoice",
+          id: i._id || i.id,
+          label: i.number || i.invoiceNumber || i.patientName || i.name || ("Invoice " + (i._id || i.id)),
+          status: i.status || i.state,
+          date: i.dueDate || i.date || i.createdAt
+        })),
+        ...payments.map((p: any) => ({
+          type: "payment",
+          id: p._id || p.id,
+          label: p.invoiceNumber || p.reference || p.patientName || ("Payment " + (p._id || p.id)),
+          status: p.status || p.state,
+          date: p.paymentDate || p.date || p.createdAt
+        }))
+      ].filter(a => a.date).sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0,8);
+      setRecentActivity(activity);
+    } catch (e: any) {
+      console.error("Dashboard load error:", e);
+      setError(e.message || "Failed to load dashboard data");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    let mounted = true;
+    // initial load
+    refreshDashboard();
+
+    // refresh every 60 seconds
+    const t = setInterval(() => { refreshDashboard(); }, 60000);
+
+    // react to billing updates from other modules
+    const onBillingUpdated = () => { refreshDashboard().catch((e:any)=>console.warn('refreshDashboard failed', e)); };
+    window.addEventListener('billing-updated', onBillingUpdated as EventListener);
+    window.addEventListener('billing-cleared', onBillingUpdated as EventListener);
+
+    return () => { clearInterval(t); window.removeEventListener('billing-updated', onBillingUpdated as EventListener); window.removeEventListener('billing-cleared', onBillingUpdated as EventListener); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Manual refresh handler (keeps logic lightweight and non-blocking)
+  const handleRefresh = async () => {
+    try {
+      setLoading(true);
+      let invoices: any[] = [];
+      let payments: any[] = [];
+      const patients = await fetchPatients();
+      if (!billingService.isRemoteSyncSuppressed()) {
+        const res = await Promise.all([fetchInvoices(), fetchPayments()]);
+        invoices = res[0];
+        payments = res[1];
+      }
+      setTotalPatients(Array.isArray(patients) ? patients.length : null);
+
+      const now = new Date();
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+      const revenueToday = (payments || []).reduce((s: number, p: any) => {
+        const d = new Date(p.paymentDate || p.date || p.createdAt || null);
+        if (!isNaN(d.getTime())) {
+          const startOfToday = new Date(); startOfToday.setHours(0,0,0,0);
+          const endOfToday = new Date(); endOfToday.setHours(23,59,59,999);
+          if (d >= startOfToday && d <= endOfToday) return s + asNumber(p);
+        }
+        return s;
+      }, 0);
+      setTotalRevenueToday(revenueToday);
+
+      const revenueMonth = (payments || []).reduce((s: number, p: any) => {
+        const d = new Date(p.paymentDate || p.date || p.createdAt || null);
+        if (!isNaN(d.getTime()) && d >= monthStart && d <= now) return s + asNumber(p);
+        return s;
+      }, 0);
+      setRevenueMTD(revenueMonth);
+
+      const pending = (invoices || []).filter((i: any) => {
+        const st = (i.status || i.state || "").toString().toLowerCase();
+        return ["pending", "unpaid", "draft", "overdue"].includes(st);
+      }).length;
+      setPendingInvoices(pending);
+
+      const weekLater = new Date(); weekLater.setDate(now.getDate() + 7);
+      const due = (invoices || []).filter((i: any) => {
+        const d = new Date(i.dueDate || i.due || i.date || i.createdAt || null);
+        return !isNaN(d.getTime()) && d >= now && d <= weekLater;
+      }).length;
+      setDueThisWeek(due);
+
+      const processed = (payments || []).filter((p: any) => {
+        const st = (p.status || p.state || "").toString().toLowerCase();
+        return ["paid", "completed", "processed"].includes(st);
+      }).length;
+      setProcessedPayments(processed);
+
+      const activity = [
+        ...((invoices || []).map((i: any) => ({ type: 'invoice', id: i._id || i.id, label: i.number || i.patientName || ('Invoice ' + (i._id || i.id)), date: i.dueDate || i.date || i.createdAt }))),
+        ...((payments || []).map((p: any) => ({ type: 'payment', id: p._id || p.id, label: p.invoiceNumber || p.reference || p.patientName || ('Payment ' + (p._id || p.id)), date: p.paymentDate || p.date || p.createdAt })))
+      ].filter(a => a.date).sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0,8);
+      setRecentActivity(activity);
+    } catch (e) {
+      console.warn('Refresh failed', e);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   if (loading) return <div className="p-6">Loading dashboard...</div>;
   if (error) return <div className="p-6 text-red-600">Error: {error}. Check console/network.</div>;
@@ -243,10 +370,11 @@ export function Dashboard({ onNavigateToModule }: DashboardProps) {
 
         {/* Quick Stats Section */}
         <section className="mt-12">
-          <div className="bg-[#358E83] rounded-lg p-4 mb-6">
-            <h2 className="text-2xl font-semibold text-white">
-              Quick Overview
-            </h2>
+          <div className="bg-[#358E83] rounded-lg p-4 mb-6 flex items-center justify-between">
+            <h2 className="text-2xl font-semibold text-white">Quick Overview</h2>
+            <div>
+              <Button variant="outline" onClick={handleRefresh} className="bg-white text-sm">Refresh</Button>
+            </div>
           </div>
           
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
@@ -255,7 +383,7 @@ export function Dashboard({ onNavigateToModule }: DashboardProps) {
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-sm text-gray-600 mb-1">Total Patients</p>
-                    <p className="text-2xl font-semibold text-gray-900">2,847</p>
+                      <p className="text-2xl font-semibold text-gray-900">{totalPatients ?? '—'}</p>
                   </div>
                   <Users className="h-8 w-8 text-blue-500" />
                 </div>
@@ -267,7 +395,7 @@ export function Dashboard({ onNavigateToModule }: DashboardProps) {
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-sm text-gray-600 mb-1">Appointments Today</p>
-                    <p className="text-2xl font-semibold text-gray-900">43</p>
+                    <p className="text-2xl font-semibold text-gray-900">{appointmentsToday ?? '—'}</p>
                   </div>
                   <Calendar className="h-8 w-8 text-green-500" />
                 </div>
@@ -279,7 +407,7 @@ export function Dashboard({ onNavigateToModule }: DashboardProps) {
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-sm text-gray-600 mb-1">Pending Invoices</p>
-                    <p className="text-2xl font-semibold text-gray-900">15</p>
+                    <p className="text-2xl font-semibold text-gray-900">{pendingInvoices}</p>
                   </div>
                   <FileText className="h-8 w-8 text-orange-500" />
                 </div>
@@ -291,7 +419,7 @@ export function Dashboard({ onNavigateToModule }: DashboardProps) {
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-sm text-gray-600 mb-1">Revenue (MTD)</p>
-                    <p className="text-2xl font-semibold text-gray-900">₱6.2M</p>
+                    <p className="text-2xl font-semibold text-gray-900">₱{revenueMTD.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</p>
                   </div>
                   <DollarSign className="h-8 w-8 text-teal-500" />
                 </div>

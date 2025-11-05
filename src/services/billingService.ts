@@ -39,6 +39,8 @@ export interface BillingRecord {
 class BillingService {
   private records: BillingRecord[] = [];
   private listeners: Array<(records: BillingRecord[]) => void> = [];
+  // When true, components should avoid fetching remote billing data
+  private remoteSyncSuppressed: boolean = false;
 
   constructor() {
     // Initialize with some sample data
@@ -208,6 +210,23 @@ class BillingService {
   // Get all records
   getAllRecords(): BillingRecord[] {
     return [...this.records];
+  }
+
+  // Clear all records (useful for resetting demo or clearing transaction history)
+  clearAllRecords(options?: { notify?: boolean }) {
+    this.records = [];
+    if (options?.notify === false) return;
+    this.notifyListeners();
+  }
+
+  // Control suppression of remote sync globally. When suppressed, components
+  // should not fetch remote invoices/payments until suppression is lifted.
+  setRemoteSyncSuppressed(suppressed: boolean) {
+    this.remoteSyncSuppressed = !!suppressed;
+  }
+
+  isRemoteSyncSuppressed() {
+    return this.remoteSyncSuppressed;
   }
 
   // Add a new billing record (from payment processing)

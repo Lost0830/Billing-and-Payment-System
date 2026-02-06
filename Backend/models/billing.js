@@ -11,6 +11,7 @@ const itemSchema = new mongoose.Schema({
 const billingSchema = new mongoose.Schema({
   invoiceNumber: { type: String, required: true },
   patientId: String,
+  patientNumber: String,
   patientName: String,
   items: [itemSchema],
   subtotal: Number,

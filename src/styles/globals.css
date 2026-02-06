@@ -203,3 +203,16 @@
 html {
   font-size: var(--font-size);
 }
+
+/* Make app root full height and prevent body scrolling so internal layout controls scroll */
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  overflow: hidden;
+}
+
+/* Ensure the app root fills the viewport and prevent the page body from scrolling.
+   Only the internal main content area should scroll (handled by layout components). */
+/* (Reverted custom sidebar menu styles and body overflow changes) */

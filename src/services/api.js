@@ -1,4 +1,24 @@
-const API_URL = (import.meta?.env?.VITE_API_URL) || "http://localhost:5000/api";
+// Resolve API base URL: use VITE_API_URL env, fallback to billing backend on port 5002
+const resolveApiBase = () => {
+  try {
+    const win = typeof window !== 'undefined' ? window : undefined;
+    const envFromWindow = win?.__ENV__?.VITE_API_URL || win?.VITE_API_URL;
+    const importMetaEnv = (typeof import.meta !== 'undefined' ? import.meta?.env?.VITE_API_URL : undefined);
+    const nodeEnvVar = (typeof process !== 'undefined' ? process?.env?.VITE_API_URL : undefined);
+
+    const resolved = envFromWindow || importMetaEnv || nodeEnvVar || '';
+    if (resolved && typeof resolved === 'string' && resolved.trim() !== '') {
+      return `${resolved.replace(/\/$/, '')}/api`;
+    }
+  } catch {
+    // ignore and fallback
+  }
+  // Fallback to billing backend on port 5002
+  return 'http://localhost:5002/api';
+};
+
+const API_URL = resolveApiBase();
+console.log('[api.js] API_URL resolved to:', API_URL);
 
 async function safeJson(res) {
   const text = await res.text();

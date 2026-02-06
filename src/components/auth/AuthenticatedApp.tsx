@@ -1,12 +1,12 @@
 import { MediCareBilling } from "../MediCareBilling";
-import { Dashboard } from "../Dashboard";
 import { AdminDashboard } from "../AdminDashboard";
 import { Patients } from "../Patients";
 import { PatientsManagement } from "../PatientsManagement";
 import { Appointments } from "../Appointments";
 import { Settings } from "../Settings";
 import { Pharmacy } from "../Pharmacy";
-import { InvoiceGeneration } from "../InvoiceGeneration";
+import { AdminInvoiceGeneration } from "../AdminInvoiceGeneration";
+import { CashierInvoiceView } from "../CashierInvoiceView";
 import { PaymentProcessing } from "../PaymentProcessing";
 import { BillingHistory } from "../BillingHistory";
 import { DiscountsPromotions } from "../DiscountsPromotions";
@@ -105,8 +105,8 @@ export function AuthenticatedApp({ currentView, userSession, onNavigateToView }:
   };
 
   // Check if current view is a billing module
-  const billingModules = ["medicare-billing", "invoice", "payment", "history", "discounts"];
-  const adminModules = ["discount-management", "user-management"];
+  const billingModules = ["medicare-billing", "payment", "history", "discounts"];
+  const adminModules = ["invoice", "discount-management", "user-management"];
   const sharedModules = ["patients-management"]; // Accessible by both admins and cashiers
   const isBillingModule = billingModules.includes(currentView);
   const isAdminModule = adminModules.includes(currentView);
@@ -114,17 +114,10 @@ export function AuthenticatedApp({ currentView, userSession, onNavigateToView }:
 
   // Render billing content
   const renderBillingContent = () => {
-    // Admin users cannot access billing/cashier modules
-    if (userSession.role === 'admin') {
-      return <AdminDashboard onNavigateToModule={onNavigateToView} />;
-    }
-
-    // Cashiers can access all billing modules
+    // Cashiers can access invoice viewing and payment processing
     switch (currentView) {
       case "medicare-billing":
         return <MediCareBilling onNavigateToView={onNavigateToView} />;
-      case "invoice":
-        return <InvoiceGeneration onNavigateToView={onNavigateToView} userSession={userSession} />;
       case "payment":
         return <PaymentProcessing onNavigateToView={onNavigateToView} userSession={userSession} />;
       case "history":
@@ -132,13 +125,15 @@ export function AuthenticatedApp({ currentView, userSession, onNavigateToView }:
       case "discounts":
         return <DiscountsPromotions onNavigateToView={onNavigateToView} />;
       default:
-        return <MediCareBilling onNavigateToView={onNavigateToView} />;
+        return <CashierInvoiceView onNavigateToView={onNavigateToView} />;
     }
   };
 
   // Render admin content
   const renderAdminContent = () => {
     switch (currentView) {
+      case "invoice":
+        return <AdminInvoiceGeneration onNavigateToView={onNavigateToView} />;
       case "discount-management":
         return <DiscountManagement onNavigateToView={onNavigateToView} />;
       case "user-management":
@@ -157,22 +152,28 @@ export function AuthenticatedApp({ currentView, userSession, onNavigateToView }:
       return <PatientsManagement onNavigateToView={onNavigateToView} userSession={userSession} />;
     }
 
-    // Admin modules (admin-only)
-    if (isAdminModule && userSession.role === 'admin') {
-      return renderAdminContent();
+    // Admin modules (admin-only) - but show CashierInvoiceView for cashiers accessing "invoice"
+    if (isAdminModule) {
+      if (userSession.role === 'admin') {
+        return renderAdminContent();
+      }
+      // Cashiers accessing "invoice" should see CashierInvoiceView
+      if (currentView === 'invoice' && userSession.role === 'cashier') {
+        return <CashierInvoiceView onNavigateToView={onNavigateToView} />;
+      }
     }
 
-    // Billing modules (cashier-accessible)
+    // Billing modules (render specific component based on view)
     if (isBillingModule) {
       return renderBillingContent();
     }
 
     switch (currentView) {
       case "dashboard":
-        // Show AdminDashboard for admin users, regular Dashboard for others
+        // Show AdminDashboard for admin users, MediCareBilling for cashiers
         return userSession.role === 'admin' 
           ? <AdminDashboard onNavigateToModule={onNavigateToView} />
-          : <Dashboard onNavigateToModule={onNavigateToView} />;
+          : <MediCareBilling onNavigateToView={onNavigateToView} />;
       case "patients":
         return <Patients onNavigateToView={onNavigateToView} />;
       case "appointments":
@@ -186,7 +187,7 @@ export function AuthenticatedApp({ currentView, userSession, onNavigateToView }:
       default:
         return userSession.role === 'admin'
           ? <AdminDashboard onNavigateToModule={onNavigateToView} />
-          : <Dashboard onNavigateToModule={onNavigateToView} />;
+          : <MediCareBilling onNavigateToView={onNavigateToView} />;
     }
   };
 

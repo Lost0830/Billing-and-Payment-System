@@ -5,12 +5,18 @@
       <meta charset="UTF-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1.0" />
       <title>Billing and Payment UI</title>
-      <script type="module" crossorigin src="/assets/index-FI9k69YJ.js"></script>
+      <script type="module" crossorigin src="/assets/index-CtFiIbvi.js"></script>
       <link rel="stylesheet" crossorigin href="/assets/index-cJp0MFDo.css">
     </head>
 
     <body>
-      <div id="root"></div>
+      <!-- Helpful fallback so a completely blank page shows a message and an inline script log -->
+      <div id="root">If the app appears blank, open DevTools Console to see errors.</div>
+      <script>
+        // Inline log to confirm index.html is served and the browser executed inline scripts
+        // If you don't see this in the Console, the browser didn't load the page resources.
+        console.log('index.html inline script executed');
+      </script>
     </body>
   </html>
   

@@ -15,7 +15,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "./ui/dialog";
 import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
 import { AlertCircle } from "lucide-react";
@@ -76,12 +75,19 @@ export default function ArchivedPatients() {
       const response = await fetch(`/api/patients/${selectedPatient._id}`, {
         method: 'DELETE',
       });
-      const data = await response.json();
-      if (data.success) {
+      if (response.ok) {
+        // success
         setShowDeleteDialog(false);
-        fetchArchivedPatients(); // Refresh the list
+        setSelectedPatient(null);
+        fetchArchivedPatients();
       } else {
-        setError(data.message || 'Failed to delete patient');
+        // try to parse error message from body
+        let message = 'Failed to delete patient';
+        try {
+          const body = await response.json();
+          if (body && body.message) message = body.message;
+        } catch (e) { /* ignore parse error */ }
+        setError(message);
       }
     } catch (err) {
       setError('Failed to delete patient');
@@ -127,44 +133,47 @@ export default function ArchivedPatients() {
                   >
                     Restore
                   </Button>
-                  <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
-                    <DialogTrigger asChild>
-                      <Button
-                        variant="destructive"
-                        onClick={() => setSelectedPatient(patient)}
-                      >
-                        Delete
-                      </Button>
-                    </DialogTrigger>
-                    <DialogContent>
-                      <DialogHeader>
-                        <DialogTitle>Confirm Permanent Deletion</DialogTitle>
-                        <DialogDescription>
-                          Are you sure you want to permanently delete {patient.name}? This action cannot be undone.
-                        </DialogDescription>
-                      </DialogHeader>
-                      <DialogFooter>
-                        <Button
-                          variant="outline"
-                          onClick={() => setShowDeleteDialog(false)}
-                        >
-                          Cancel
-                        </Button>
-                        <Button
-                          variant="destructive"
-                          onClick={handleDelete}
-                        >
-                          Delete Permanently
-                        </Button>
-                      </DialogFooter>
-                    </DialogContent>
-                  </Dialog>
+                  <Button
+                    variant="destructive"
+                    onClick={() => { setSelectedPatient(patient); setShowDeleteDialog(true); }}
+                  >
+                    Delete
+                  </Button>
                 </div>
               </TableCell>
             </TableRow>
           ))}
         </TableBody>
       </Table>
+
+      {/* Centralized Delete Confirmation Dialog */}
+      <Dialog open={showDeleteDialog} onOpenChange={(open) => {
+        setShowDeleteDialog(open);
+        if (!open) setSelectedPatient(null);
+      }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Confirm Permanent Deletion</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to permanently delete {selectedPatient?.name}? This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => { setShowDeleteDialog(false); setSelectedPatient(null); }}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleDelete}
+            >
+              Delete Permanently
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

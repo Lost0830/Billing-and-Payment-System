@@ -113,226 +113,23 @@ export class PharmacyIntegrationService {
     unsyncedOnly: boolean = false
   ): Promise<PharmacyTransaction[]> {
     try {
-      // Mock data - replace with actual API call
-      const mockTransactions: PharmacyTransaction[] = [
-        {
-          id: "pharm_001",
-          transactionId: "PH-TXN-2025-001",
-          patientId: "P001",
-          patientName: "Maria Santos",
-          pharmacyId: "PHARM-001",
-          pharmacyName: "MedPlus Pharmacy",
-          pharmacyAddress: "Ground Floor, Medical Center Building, Quezon City",
-          transactionDate: "2025-01-04",
-          transactionTime: "15:30",
-          prescriptionId: "RX-2025-001",
-          doctorId: "DOC-001",
-          doctorName: "Dr. Juan Reyes",
-          items: [
-            {
-              id: "item_001",
-              medicationId: "MED-001",
-              medicationName: "Paracetamol",
-              genericName: "Paracetamol",
-              brand: "Biogesic",
-              strength: "500mg",
-              dosageForm: "Tablet",
-              quantity: 20,
-              unitPrice: 2.50,
-              totalPrice: 50,
-              prescriptionRequired: false,
-              batchNumber: "PC250104",
-              expiryDate: "2026-12-31"
-            },
-            {
-              id: "item_002",
-              medicationId: "MED-002", 
-              medicationName: "Amoxicillin",
-              genericName: "Amoxicillin",
-              brand: "Amoxil",
-              strength: "500mg",
-              dosageForm: "Capsule",
-              quantity: 21,
-              unitPrice: 8.50,
-              totalPrice: 178.50,
-              prescriptionRequired: true,
-              batchNumber: "AMX250104",
-              expiryDate: "2026-11-30"
-            },
-            {
-              id: "item_003",
-              medicationId: "MED-003",
-              medicationName: "Mefenamic Acid",
-              genericName: "Mefenamic Acid",
-              brand: "Dolfenal",
-              strength: "500mg",
-              dosageForm: "Capsule",
-              quantity: 10,
-              unitPrice: 5.00,
-              totalPrice: 50,
-              prescriptionRequired: false,
-              batchNumber: "MF250104",
-              expiryDate: "2026-10-31"
-            }
-          ],
-          subtotal: 278.50,
-          tax: 33.42,
-          discount: 0,
-          totalAmount: 311.92,
-          paymentMethod: "Cash",
-          paymentStatus: "Paid",
-          syncStatus: "Synced",
-          syncedAt: "2025-01-04T15:45:00Z",
-          notes: "Pain medication and antibiotics for abdominal pain treatment"
-        },
-        {
-          id: "pharm_002",
-          transactionId: "PH-TXN-2025-002", 
-          patientId: "P004",
-          patientName: "Roberto Cruz",
-          pharmacyId: "PHARM-001",
-          pharmacyName: "MedPlus Pharmacy",
-          pharmacyAddress: "Ground Floor, Medical Center Building, Quezon City",
-          transactionDate: "2025-01-01",
-          transactionTime: "11:15",
-          prescriptionId: "RX-2025-002",
-          doctorId: "DOC-002",
-          doctorName: "Dr. Pedro Gonzales",
-          items: [
-            {
-              id: "item_004",
-              medicationId: "MED-004",
-              medicationName: "Ceftriaxone Sodium",
-              genericName: "Ceftriaxone",
-              brand: "Rocephin",
-              strength: "1g",
-              dosageForm: "Injectable",
-              quantity: 6,
-              unitPrice: 95,
-              totalPrice: 570,
-              prescriptionRequired: true,
-              batchNumber: "CFT250101",
-              expiryDate: "2026-12-31"
-            },
-            {
-              id: "item_005",
-              medicationId: "MED-005",
-              medicationName: "Metronidazole",
-              genericName: "Metronidazole",
-              brand: "Flagyl",
-              strength: "500mg",
-              dosageForm: "Tablet",
-              quantity: 21,
-              unitPrice: 6.50,
-              totalPrice: 136.50,
-              prescriptionRequired: true,
-              batchNumber: "MTZ250101",
-              expiryDate: "2026-11-30"
-            },
-            {
-              id: "item_006",
-              medicationId: "MED-006",
-              medicationName: "Tramadol Hydrochloride",
-              genericName: "Tramadol",
-              brand: "Tramal",
-              strength: "50mg",
-              dosageForm: "Capsule",
-              quantity: 20,
-              unitPrice: 12,
-              totalPrice: 240,
-              prescriptionRequired: true,
-              batchNumber: "TRM250101",
-              expiryDate: "2026-09-30"
-            }
-          ],
-          subtotal: 946.50,
-          tax: 113.58,
-          discount: 0,
-          totalAmount: 1060.08,
-          paymentMethod: "PhilHealth",
-          paymentStatus: "Paid",
-          syncStatus: "Synced",
-          syncedAt: "2025-01-01T11:30:00Z",
-          notes: "Post-operative medications for appendectomy"
-        },
-        {
-          id: "pharm_003",
-          transactionId: "PH-TXN-2025-003", 
-          patientId: "P007",
-          patientName: "Sofia Garcia",
-          pharmacyId: "PHARM-001",
-          pharmacyName: "MedPlus Pharmacy",
-          pharmacyAddress: "Ground Floor, Medical Center Building, Quezon City",
-          transactionDate: "2025-01-03",
-          transactionTime: "09:45",
-          prescriptionId: "RX-2025-003",
-          doctorId: "DOC-003",
-          doctorName: "Dr. Carlos Mendoza",
-          items: [
-            {
-              id: "item_007",
-              medicationId: "MED-007",
-              medicationName: "Omeprazole",
-              genericName: "Omeprazole",
-              brand: "Losec",
-              strength: "20mg",
-              dosageForm: "Capsule",
-              quantity: 30,
-              unitPrice: 8,
-              totalPrice: 240,
-              prescriptionRequired: true,
-              batchNumber: "OMP250103",
-              expiryDate: "2026-12-31"
-            },
-            {
-              id: "item_008",
-              medicationId: "MED-008",
-              medicationName: "Ondansetron",
-              genericName: "Ondansetron",
-              brand: "Zofran",
-              strength: "4mg",
-              dosageForm: "Tablet",
-              quantity: 10,
-              unitPrice: 25,
-              totalPrice: 250,
-              prescriptionRequired: true,
-              batchNumber: "OND250103",
-              expiryDate: "2026-10-31"
-            }
-          ],
-          subtotal: 490,
-          tax: 58.80,
-          discount: 0,
-          totalAmount: 548.80,
-          paymentMethod: "GCash",
-          paymentStatus: "Paid",
-          syncStatus: "Synced",
-          syncedAt: "2025-01-03T10:00:00Z",
-          notes: "Post-operative medications for gallbladder surgery"
-        }
-      ];
-
-      let filteredTransactions = mockTransactions;
-
-      if (patientId) {
-        filteredTransactions = filteredTransactions.filter(t => t.patientId === patientId);
+      // When configured to use backend proxy, call real API via backend
+      if (this.config.baseUrl && this.config.baseUrl.startsWith('/api')) {
+        const qs = new URLSearchParams({
+          patientId: patientId || '',
+          dateFrom: dateFrom || '',
+          dateTo: dateTo || '',
+          unsyncedOnly: String(unsyncedOnly || '')
+        }).toString();
+        const resp = await this.makeRequest(`/transactions${qs ? `?${qs}` : ''}`);
+        this.status.lastSync = new Date();
+        this.status.totalSynced += Array.isArray(resp?.data) ? resp.data.length : (Array.isArray(resp) ? resp.length : 0);
+        return (resp?.data || resp) as PharmacyTransaction[];
       }
 
-      if (dateFrom) {
-        filteredTransactions = filteredTransactions.filter(t => t.transactionDate >= dateFrom);
-      }
-
-      if (dateTo) {
-        filteredTransactions = filteredTransactions.filter(t => t.transactionDate <= dateTo);
-      }
-
-      if (unsyncedOnly) {
-        filteredTransactions = filteredTransactions.filter(t => t.syncStatus === 'Pending');
-      }
-
-      this.status.lastSync = new Date();
-      this.status.totalSynced += filteredTransactions.length;
-      return filteredTransactions;
+      // No mock data - return empty array if API is not configured
+      console.warn('Pharmacy API not configured, returning empty transactions');
+      return [];
     } catch (error) {
       this.status.lastError = `Failed to fetch transactions: ${error}`;
       throw error;
@@ -342,41 +139,14 @@ export class PharmacyIntegrationService {
   // Fetch pharmacy inventory
   async getInventory(medicationId?: string): Promise<PharmacyInventory[]> {
     try {
-      // Mock data - replace with actual API call
-      const mockInventory: PharmacyInventory[] = [
-        {
-          id: "inv_001",
-          medicationId: "MED-001",
-          medicationName: "Paracetamol",
-          genericName: "Paracetamol", 
-          brand: "Biogesic",
-          strength: "500mg",
-          dosageForm: "Tablet",
-          unitPrice: 2.50,
-          stockQuantity: 500,
-          reorderLevel: 100,
-          status: "In Stock",
-          lastUpdated: "2025-01-08T08:00:00Z"
-        },
-        {
-          id: "inv_002",
-          medicationId: "MED-002",
-          medicationName: "Amoxicillin",
-          genericName: "Amoxicillin",
-          brand: "Amoxil", 
-          strength: "500mg",
-          dosageForm: "Capsule",
-          unitPrice: 8.50,
-          stockQuantity: 25,
-          reorderLevel: 30,
-          status: "Low Stock",
-          lastUpdated: "2025-01-08T08:00:00Z"
-        }
-      ];
-
-      return medicationId 
-        ? mockInventory.filter(item => item.medicationId === medicationId)
-        : mockInventory;
+      if (this.config.baseUrl && this.config.baseUrl.startsWith('/api')) {
+        const qs = new URLSearchParams({ medicationId: medicationId || '' }).toString();
+        const resp = await this.makeRequest(`/inventory${qs ? `?${qs}` : ''}`);
+        return (resp?.data || resp) as PharmacyInventory[];
+      }
+      // No mock data - return empty array if API is not configured
+      console.warn('Pharmacy API not configured, returning empty inventory');
+      return [];
     } catch (error) {
       this.status.lastError = `Failed to fetch inventory: ${error}`;
       throw error;
@@ -386,51 +156,17 @@ export class PharmacyIntegrationService {
   // Fetch prescriptions
   async getPrescriptions(patientId?: string, status?: string): Promise<PharmacyPrescription[]> {
     try {
-      // Mock data - replace with actual API call
-      const mockPrescriptions: PharmacyPrescription[] = [
-        {
-          id: "presc_001",
-          prescriptionId: "RX-2025-001",
-          patientId: "P001",
-          doctorId: "DOC-001",
-          prescriptionDate: "2025-01-04",
-          medications: [
-            {
-              medicationId: "MED-001",
-              medicationName: "Paracetamol 500mg",
-              dosage: "500mg",
-              frequency: "Every 6 hours as needed",
-              duration: "7 days",
-              quantity: 20,
-              instructions: "Take with food for pain relief"
-            },
-            {
-              medicationId: "MED-002",
-              medicationName: "Amoxicillin 500mg",
-              dosage: "500mg",
-              frequency: "Three times daily",
-              duration: "7 days",
-              quantity: 21,
-              instructions: "Complete the full course"
-            }
-          ],
-          status: "Filled",
-          filledAt: "2025-01-04T15:30:00Z",
-          filledBy: "PharmTech-001"
-        }
-      ];
-
-      let filteredPrescriptions = mockPrescriptions;
-
-      if (patientId) {
-        filteredPrescriptions = filteredPrescriptions.filter(p => p.patientId === patientId);
+      if (this.config.baseUrl && this.config.baseUrl.startsWith('/api')) {
+        const qs = new URLSearchParams({
+          patientId: patientId || '',
+          status: status || ''
+        }).toString();
+        const resp = await this.makeRequest(`/prescriptions${qs ? `?${qs}` : ''}`);
+        return (resp?.data || resp) as PharmacyPrescription[];
       }
-
-      if (status) {
-        filteredPrescriptions = filteredPrescriptions.filter(p => p.status === status);
-      }
-
-      return filteredPrescriptions;
+      // No mock data - return empty array if API is not configured
+      console.warn('Pharmacy API not configured, returning empty prescriptions');
+      return [];
     } catch (error) {
       this.status.lastError = `Failed to fetch prescriptions: ${error}`;
       throw error;
@@ -440,7 +176,10 @@ export class PharmacyIntegrationService {
   // Mark transaction as synced in billing system
   async markTransactionAsSynced(transactionId: string): Promise<boolean> {
     try {
-      // Mock API call - replace with actual pharmacy API
+      if (this.config.baseUrl && this.config.baseUrl.startsWith('/api')) {
+        const resp = await this.makeRequest(`/transactions/${transactionId}/mark-synced`, { method: 'POST' });
+        return !!resp;
+      }
       console.log(`Marking pharmacy transaction ${transactionId} as synced`);
       return true;
     } catch (error) {
@@ -488,11 +227,11 @@ export class PharmacyIntegrationService {
 
   // Private method to make API requests
   private async makeRequest(endpoint: string, options: RequestInit = {}): Promise<any> {
-    const url = `${this.config.baseUrl}${this.config.endpoints.transactions || endpoint}`;
+    const url = `${this.config.baseUrl}${endpoint}`;
     
     const defaultOptions: RequestInit = {
       headers: {
-        'Authorization': `Bearer ${this.config.apiKey}`,
+        'Authorization': this.config.apiKey ? `Bearer ${this.config.apiKey}` : undefined,
         'Content-Type': 'application/json',
         'Accept': 'application/json'
       },

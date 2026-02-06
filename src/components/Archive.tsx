@@ -1,9 +1,11 @@
 import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Button } from "./ui/button";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "./ui/alert-dialog";
 import { toast } from "sonner";
 import { Archive as ArchiveIcon, Trash2, RefreshCw, RotateCcw } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table";
+import { Checkbox } from "./ui/checkbox";
 
 interface ArchivedItem {
   id: string;
@@ -16,6 +18,13 @@ interface ArchivedItem {
 export function Archive() {
   const [archivedItems, setArchivedItems] = useState<ArchivedItem[]>([]);
   const [loading, setLoading] = useState(false);
+  const [showRestoreDialog, setShowRestoreDialog] = useState(false);
+  const [restoreTarget, setRestoreTarget] = useState<ArchivedItem | null>(null);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<ArchivedItem | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [showBulkRestoreDialog, setShowBulkRestoreDialog] = useState(false);
+  const [showBulkDeleteDialog, setShowBulkDeleteDialog] = useState(false);
 
   const fetchArchivedItems = async () => {
     setLoading(true);
@@ -116,25 +125,41 @@ export function Archive() {
         }
       }
 
-      // Use archive API to restore for backend resources (users/patients/invoices)
+      // Try primary archive endpoint first, fallback to resource restore endpoint used elsewhere
       const typeKey = item.type.toLowerCase() === 'user' ? 'users' : item.type.toLowerCase() === 'patient' ? 'patients' : 'invoices';
-      const response = await fetch(`/api/archive/${typeKey}/${item.id}/restore`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
-      });
-      if (!response.ok) throw new Error('Failed to restore item');
+      const endpoints = [
+        `/api/archive/${typeKey}/${item.id}/restore`,
+        `/api/${typeKey}/${item.id}/restore`,
+        `/${typeKey}/${item.id}/restore`
+      ];
+
+      let restored = false;
+      for (const url of endpoints) {
+        try {
+          const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+          });
+          if (response.ok) {
+            restored = true;
+            break;
+          }
+        } catch (e) {
+          // try next endpoint
+        }
+      }
+
+      if (!restored) throw new Error('Failed to restore item');
+
       toast.success(`${item.type} restored successfully`);
       fetchArchivedItems(); // Refresh the list
     } catch (error) {
+      console.error('Restore error', error);
       toast.error(`Failed to restore ${item.type.toLowerCase()}`);
     }
   };
 
   const handlePermanentDelete = async (item: ArchivedItem) => {
-    if (!confirm(`Are you sure you want to permanently delete this ${item.type.toLowerCase()}? This action cannot be undone.`)) {
-      return;
-    }
-
     try {
       // client-side discounts/promotions should be removed locally
       if (item.type === 'Discount' || item.type === 'Promotion') {
@@ -156,16 +181,63 @@ export function Archive() {
       }
 
       const typeKey = item.type.toLowerCase() === 'user' ? 'users' : item.type.toLowerCase() === 'patient' ? 'patients' : 'invoices';
-      const response = await fetch(`/api/archive/${typeKey}/${item.id}/permanent`, {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' }
-      });
-      if (!response.ok) throw new Error('Failed to delete item');
+      const endpoints = [
+        `/api/archive/${typeKey}/${item.id}/permanent`,
+        `/api/${typeKey}/${item.id}`,
+        `/${typeKey}/${item.id}`
+      ];
+
+      let deleted = false;
+      for (const url of endpoints) {
+        try {
+          const response = await fetch(url, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' }
+          });
+          if (response.ok) {
+            deleted = true;
+            break;
+          }
+        } catch (e) {
+          // try next endpoint
+        }
+      }
+
+      if (!deleted) throw new Error('Failed to delete item');
+
       toast.success(`${item.type} permanently deleted`);
       fetchArchivedItems(); // Refresh the list
     } catch (error) {
+      console.error('Delete error', error);
       toast.error(`Failed to delete ${item.type.toLowerCase()}`);
     }
+  };
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.length === archivedItems.length) setSelectedIds([]);
+    else setSelectedIds(archivedItems.map(i => i.id));
+  };
+
+  const confirmBulkRestore = async () => {
+    for (const id of selectedIds) {
+      const item = archivedItems.find(i => i.id === id);
+      if (item) await handleRestore(item);
+    }
+    setSelectedIds([]);
+    setShowBulkRestoreDialog(false);
+  };
+
+  const confirmBulkDelete = async () => {
+    for (const id of selectedIds) {
+      const item = archivedItems.find(i => i.id === id);
+      if (item) await handlePermanentDelete(item);
+    }
+    setSelectedIds([]);
+    setShowBulkDeleteDialog(false);
   };
 
   return (
@@ -188,9 +260,24 @@ export function Archive() {
           </Button>
         </CardHeader>
         <CardContent>
+          {selectedIds.length > 0 && (
+            <div className="mb-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-blue-800">{selectedIds.length} item{selectedIds.length > 1 ? 's' : ''} selected</span>
+                <div className="flex gap-2">
+                  <Button size="sm" variant="outline" onClick={() => setShowBulkRestoreDialog(true)}>Restore Selected</Button>
+                  <Button size="sm" variant="destructive" onClick={() => setShowBulkDeleteDialog(true)}>Delete Selected</Button>
+                  <Button size="sm" variant="outline" onClick={() => setSelectedIds([])}>Clear</Button>
+                </div>
+              </div>
+            </div>
+          )}
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead className="w-12">
+                  <Checkbox checked={archivedItems.length > 0 && selectedIds.length === archivedItems.length} onCheckedChange={toggleSelectAll} />
+                </TableHead>
                 <TableHead>Name</TableHead>
                 <TableHead>Type</TableHead>
                 <TableHead>Archived Date</TableHead>
@@ -200,6 +287,9 @@ export function Archive() {
             <TableBody>
               {archivedItems.map((item) => (
                 <TableRow key={item.id}>
+                  <TableCell>
+                    <Checkbox checked={selectedIds.includes(item.id)} onCheckedChange={() => toggleSelect(item.id)} />
+                  </TableCell>
                   <TableCell>{item.name}</TableCell>
                   <TableCell>{item.type}</TableCell>
                   <TableCell>{item.archivedAt}</TableCell>
@@ -208,7 +298,7 @@ export function Archive() {
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => handleRestore(item)}
+                        onClick={() => { setRestoreTarget(item); setShowRestoreDialog(true); }}
                       >
                         <RotateCcw className="h-4 w-4 mr-2" />
                         Restore
@@ -216,7 +306,7 @@ export function Archive() {
                       <Button
                         variant="destructive"
                         size="sm"
-                        onClick={() => handlePermanentDelete(item)}
+                        onClick={() => { setDeleteTarget(item); setShowDeleteDialog(true); }}
                       >
                         <Trash2 className="h-4 w-4 mr-2" />
                         Delete
@@ -236,6 +326,72 @@ export function Archive() {
           </Table>
         </CardContent>
       </Card>
+      <AlertDialog open={showRestoreDialog} onOpenChange={setShowRestoreDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Restore item?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will restore the archived {restoreTarget?.type?.toLowerCase()} "{restoreTarget?.name}".
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => { if (restoreTarget) handleRestore(restoreTarget); setShowRestoreDialog(false); setRestoreTarget(null); }} className="bg-[#358E83] hover:bg-[#358E83]/90">
+              Restore
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete permanently?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete the archived {deleteTarget?.type?.toLowerCase()} "{deleteTarget?.name}".
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => { if (deleteTarget) handlePermanentDelete(deleteTarget); setShowDeleteDialog(false); setDeleteTarget(null); }} className="bg-red-600 hover:bg-red-700">
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog open={showBulkRestoreDialog} onOpenChange={setShowBulkRestoreDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Restore selected items?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will restore {selectedIds.length} selected item{selectedIds.length > 1 ? 's' : ''}.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmBulkRestore} className="bg-[#358E83] hover:bg-[#358E83]/90">
+              Restore
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={showBulkDeleteDialog} onOpenChange={setShowBulkDeleteDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete selected items permanently?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete {selectedIds.length} selected item{selectedIds.length > 1 ? 's' : ''}.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmBulkDelete} className="bg-red-600 hover:bg-red-700">
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

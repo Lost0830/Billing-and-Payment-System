@@ -1,5 +1,4 @@
-
-  import { defineConfig } from 'vite';
+import { defineConfig } from 'vite';
   import react from '@vitejs/plugin-react-swc';
   import path from 'path';
 
@@ -53,15 +52,14 @@
       outDir: 'build',
     },
     server: {
-      port: 3000,
+      port: 3001,
       open: true,
-      // Proxy API requests to the backend server to avoid the dev server returning index.html
+      // Proxy API requests to the backend server on port 5002
       proxy: {
         '/api': {
-          target: 'http://localhost:5000',
+          target: 'http://localhost:5002',
           changeOrigin: true,
           secure: false,
-          // rewrite not needed here because backend expects /api/* as-is
         },
       },
     },

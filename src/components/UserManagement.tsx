@@ -27,7 +27,6 @@ import {
   UserCheck,
   UserX,
   Key,
-  Send,
   Loader2,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -67,6 +66,7 @@ export function UserManagement({ onNavigateToView }: UserManagementProps) {
   const [deletingIds, setDeletingIds] = useState<string[]>([]);
   const [createLoading, setCreateLoading] = useState(false);
   const [editLoading, setEditLoading] = useState(false);
+  const [showCreateConfirm, setShowCreateConfirm] = useState(false);
 
   // start with an empty list and fetch from backend on mount
   const [users, setUsers] = useState<User[]>([]);
@@ -431,11 +431,6 @@ export function UserManagement({ onNavigateToView }: UserManagementProps) {
     })();
   };
 
-  const handleSendInvitation = (user: User) => {
-    // Simulate sending invitation email
-    toast.success(`Invitation email sent to ${user.email}`);
-  };
-
   return (
     <div className="space-y-6">
       {/* Header Section */}
@@ -447,7 +442,7 @@ export function UserManagement({ onNavigateToView }: UserManagementProps) {
           </div>
 
           <div className="flex items-center gap-2">
-            <Button variant="outline" className="text-white border-white/30" onClick={fetchUsers} disabled={loading}>
+            <Button variant="outline" className="bg-white/20 hover:bg-white/30 text-white border-white/30" onClick={fetchUsers} disabled={loading}>
               {loading ? 'Refreshing...' : 'Refresh'}
             </Button>
 
@@ -523,10 +518,31 @@ export function UserManagement({ onNavigateToView }: UserManagementProps) {
                     <Button variant="outline" onClick={() => setIsCreateDialogOpen(false)}>
                       Cancel
                     </Button>
-                    <Button className="bg-[#358E83] hover:bg-[#2a6f66]" onClick={handleCreateUser}>
+                    <Button className="bg-[#358E83] hover:bg-[#2a6f66]" onClick={() => setShowCreateConfirm(true)} disabled={!newUser.name || !newUser.email || !newUser.password || !newUser.confirmPassword}>
                       Create User
                     </Button>
                   </div>
+                </div>
+              </DialogContent>
+            </Dialog>
+            <Dialog open={showCreateConfirm} onOpenChange={setShowCreateConfirm}>
+              <DialogContent className="sm:max-w-md">
+                <DialogHeader>
+                  <DialogTitle>Confirm Create User?</DialogTitle>
+                  <DialogDescription>
+                    Review details before creating the user.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between"><span>Name</span><span className="font-medium">{newUser.name || '-'}</span></div>
+                  <div className="flex justify-between"><span>Email</span><span className="font-medium">{newUser.email || '-'}</span></div>
+                  <div className="flex justify-between"><span>Role</span><span className="font-medium">{newUser.role}</span></div>
+                </div>
+                <div className="flex justify-end space-x-2 pt-4">
+                  <Button variant="outline" onClick={() => setShowCreateConfirm(false)}>Cancel</Button>
+                  <Button className="bg-[#358E83] hover:bg-[#2a6f66]" onClick={() => { setShowCreateConfirm(false); handleCreateUser(); }}>
+                    Confirm
+                  </Button>
                 </div>
               </DialogContent>
             </Dialog>
@@ -751,10 +767,6 @@ export function UserManagement({ onNavigateToView }: UserManagementProps) {
                           <DropdownMenuItem onClick={() => handleResetPassword(user)}>
                             <Key className="mr-2 h-4 w-4" />
                             Reset Password
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => handleSendInvitation(user)}>
-                            <Send className="mr-2 h-4 w-4" />
-                            Send Invitation
                           </DropdownMenuItem>
                           {deletingIds.includes(user.id) ? (
                             <DropdownMenuItem className="text-red-600 opacity-70" disabled>

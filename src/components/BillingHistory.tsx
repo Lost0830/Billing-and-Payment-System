@@ -50,6 +50,7 @@ interface BillingRecord {
 }
 
 export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
+  const CLEARED_FLAG = 'billing_history_cleared_v1';
   const [selectedFilter, setSelectedFilter] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
   const { userSession } = useAuth();
@@ -61,6 +62,20 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
     loadPatients();
   }, []);
 
+  // On mount: auto-enable sync if cleared flag is not set, so recent transactions load automatically
+  useEffect(() => {
+    try {
+      // Ensure any previous explicit 'cleared' flag does not block loading — always attempt to show recent transactions
+      try { localStorage.removeItem(CLEARED_FLAG); } catch (e) { /* ignore */ }
+      setSuppressRemoteSync(false);
+      suppressRemoteRef.current = false;
+      billingService.setRemoteSyncSuppressed(false);
+      // trigger an immediate load of remote records
+      loadRemote().catch((e) => console.warn('loadRemote on mount failed', e));
+    } catch (e) { /* ignore localStorage errors */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const loadPatients = () => {
     const allPatients = patientService.getAllPatients();
     const formattedPatients = (allPatients || []).map((p:any) => ({
@@ -70,7 +85,7 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
     }));
     setPatients(formattedPatients);
   };
-  const [selectedPatientId, setSelectedPatientId] = useState('');
+  const [selectedPatientId, setSelectedPatientId] = useState('all');
   const [pharmacyTransactions, setPharmacyTransactions] = useState<PharmacyTransaction[]>([]);
   const [isLoadingPharmacy, setIsLoadingPharmacy] = useState(false);
   const [pharmacyIntegrationEnabled, setPharmacyIntegrationEnabled] = useState(false);
@@ -82,6 +97,7 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
   const [chartLabels, setChartLabels] = useState<string[]>([]);
   const [showDetailsDialog, setShowDetailsDialog] = useState(false);
   const [selectedRecord, setSelectedRecord] = useState<BillingRecord | null>(null);
+  const [displayedPatientName, setDisplayedPatientName] = useState<string>('');
   const [showClearDialog, setShowClearDialog] = useState(false);
   
   // Subscribe to billing service for real-time updates
@@ -97,6 +113,15 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
   // Load remote invoices/payments and merge with local billingService records
   // make loadRemote reusable so other components/listeners can trigger a full sync
   const loadRemote = async () => {
+    // If we've previously performed a full clear, don't fetch remote records.
+    // This ensures "Refresh" keeps the UI empty after a permanent clear.
+    try {
+      if (localStorage.getItem(CLEARED_FLAG) === 'true') {
+        setBillingRecords([]);
+        return;
+      }
+    } catch (e) { /* ignore localStorage errors */ }
+
     // Check the global suppression state stored in billingService as well as the ref
     if (suppressRemoteRef.current || billingService.isRemoteSyncSuppressed()) {
       // when suppressed we intentionally avoid fetching server records so the UI remains cleared
@@ -122,21 +147,38 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
         items: inv.items || inv.lines || []
       }));
 
-      // Map payments
-      const payRecords: BillingRecord[] = (payments || []).map((p: any) => ({
-        id: p._id || p.id || (p.reference || p.number) || String(Math.random()),
-        type: 'payment',
-        number: p.number || p.paymentNumber || p._id || p.id || '',
-        patientName: p.patientName || p.patient || (p.patientInfo && p.patientInfo.name) || '',
-        patientId: p.patientId || p.accountId || (p.patientInfo && (p.patientInfo.patientId || p.patientInfo.id)) || '',
-        date: p.paymentDate || p.date || (p.createdAt ? new Date(p.createdAt).toISOString().split('T')[0] : ''),
-        time: p.time || (p.createdAt ? new Date(p.createdAt).toLocaleTimeString() : ''),
-        amount: Number(p.amount ?? p.total ?? p.paid ?? 0) || 0,
-        status: (p.status || 'completed').toString().toLowerCase() as any,
-        description: p.description || `Payment for ${p.invoiceNumber || p.reference || ''}`,
-        paymentMethod: p.method || p.paymentMethod || undefined,
-        items: p.items || []
-      }));
+      const rawPays: any[] = payments || [];
+      const sortedPays = rawPays.slice().sort((a, b) => {
+        const ta = new Date(a.paymentDate || a.date || a.createdAt || 0).getTime();
+        const tb = new Date(b.paymentDate || b.date || b.createdAt || 0).getTime();
+        return ta - tb;
+      });
+      const transIdByKey = new Map<string, string>();
+      sortedPays.forEach((p: any, idx: number) => {
+        const key = String(p._id || p.id || `${p.invoiceNumber || ''}-${p.date || ''}-${p.amount || ''}`);
+        const existing = p.transactionId && /^TRANS-\d+$/i.test(String(p.transactionId)) ? String(p.transactionId) : '';
+        const gen = `TRANS-${String(idx + 1).padStart(3, '0')}`;
+        transIdByKey.set(key, existing || gen);
+      });
+
+      const payRecords: BillingRecord[] = rawPays.map((p: any) => {
+        const key = String(p._id || p.id || `${p.invoiceNumber || ''}-${p.date || ''}-${p.amount || ''}`);
+        const label = transIdByKey.get(key) || p.transactionId || p.number || p.paymentNumber || p._id || p.id || '';
+        return {
+          id: p._id || p.id || (p.reference || p.number) || String(Math.random()),
+          type: 'payment',
+          number: label,
+          patientName: p.patientName || p.patient || (p.patientInfo && p.patientInfo.name) || '',
+          patientId: p.patientId || p.accountId || (p.patientInfo && (p.patientInfo.patientId || p.patientInfo.id)) || '',
+          date: p.paymentDate || p.date || (p.createdAt ? new Date(p.createdAt).toISOString().split('T')[0] : ''),
+          time: p.time || (p.createdAt ? new Date(p.createdAt).toLocaleTimeString() : ''),
+          amount: Number(p.amount ?? p.total ?? p.paid ?? 0) || 0,
+          status: (p.status || 'completed').toString().toLowerCase() as any,
+          description: p.description || `Payment for ${p.invoiceNumber || p.reference || ''}`,
+          paymentMethod: p.method || p.paymentMethod || undefined,
+          items: p.items || []
+        };
+      });
 
       // Merge: start with local billingService records (already in state) then append remote but avoid duplicates by composite key
       const local = billingService.getAllRecords() as ServiceBillingRecord[];
@@ -165,6 +207,53 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
       });
 
       const merged = Array.from(byKey.values()).sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      
+      // Enrich merged records: if a payment lacks patient info, try to find a matching invoice
+      try {
+        const invoicesByNumber: { [key: string]: BillingRecord } = {};
+        merged.forEach(r => {
+          if (r.type === 'invoice' && r.number) invoicesByNumber[String(r.number)] = r;
+        });
+
+        merged.forEach(r => {
+          if ((r.type === 'payment' || r.type === 'pharmacy') && !(r.patientName && r.patientName !== '')) {
+            const invoiceRef = extractInvoiceReference(r.description || r.number || '');
+            const invoiceDigits = invoiceRef ? (invoiceRef.match(/(\d+)/)?.[0]) : null;
+
+            // try direct invoice number match using tokens/digits
+            if (invoiceRef) {
+              const found = Object.values(invoicesByNumber).find(inv =>
+                (inv.number && String(inv.number).includes(invoiceRef)) ||
+                (invoiceDigits && inv.number && String(inv.number).includes(invoiceDigits))
+              );
+              if (found) {
+                r.patientName = found.patientName || r.patientName;
+                r.patientId = r.patientId || found.patientId;
+                return;
+              }
+            }
+
+            // fallback: match by amount + date proximity (within 1 day)
+            try {
+              const amt = Number(r.amount || 0);
+              if (!isNaN(amt) && amt > 0 && r.date) {
+                const rDate = new Date(r.date).getTime();
+                const candidate = merged.find(rec =>
+                  rec.type === 'invoice' &&
+                  Math.abs((Number(rec.amount)||0) - amt) < 0.01 &&
+                  rec.date &&
+                  Math.abs(new Date(rec.date).getTime() - rDate) <= (24*60*60*1000)
+                );
+                if (candidate) {
+                  r.patientName = candidate.patientName || r.patientName;
+                  r.patientId = r.patientId || candidate.patientId;
+                }
+              }
+            } catch (e) { /* ignore */ }
+          }
+        });
+      } catch (e) { /* ignore enrichment errors */ }
+
       setBillingRecords(merged as BillingRecord[]);
     } catch (err) {
       console.warn('Failed to load remote billing data', err);
@@ -187,7 +276,7 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
         // clear search/filter to surface the new transaction and reload remote
         setSearchTerm('');
         setSelectedFilter('all');
-        setSelectedPatientId('');
+        setSelectedPatientId('all');
         loadRemote().catch(() => {});
       } catch (e) { /* ignore */ }
     };
@@ -334,6 +423,110 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
     }
   };
 
+  // Helpers to present nicer transaction numbers and patient display
+  const isObjectId = (val?: string) => typeof val === 'string' && /^[0-9a-fA-F]{24}$/.test(val);
+
+  const extractInvoiceReference = (text?: string) => {
+    if (!text) return null;
+    // Try INV-12345 style first
+    const m = text.match(/INV[-_]?\d+/i);
+    if (m) return m[0];
+    // Otherwise try to extract a long numeric token (likely an invoice number)
+    const d = text.match(/(\d{6,})/);
+    return d ? d[0] : null;
+  };
+
+  const formatTransactionNumber = (r: BillingRecord) => {
+    if (!r) return '';
+    const num = r.number || '';
+    if (num && !isObjectId(String(num))) return String(num);
+    const fromDesc = extractInvoiceReference(r.description || r.number || '');
+    if (fromDesc) return fromDesc;
+    // fallback: show short id
+    if (r.id) return `TX-${String(r.id).slice(-6)}`;
+    return String(num || '');
+  };
+
+  const resolveDisplayPatientName = (r: BillingRecord) => {
+    if (!r) return 'N/A';
+    const byPatient = resolvePatientDisplay(patients, r.patientId) || r.patientName || '';
+    if (byPatient) return byPatient;
+    // try to find a linked invoice in local records that might have patient info
+    try {
+      // search merged records (includes remote fetch) for stronger chance of finding the invoice
+      const merged = getMergedBillingRecords();
+      const invoiceRef = extractInvoiceReference(r.description || r.number || '');
+      const invoiceDigits = invoiceRef ? (invoiceRef.match(/(\d+)/)?.[0]) : null;
+      const linked = merged.find(rec => rec.type === 'invoice' && (
+        // direct includes
+        (rec.number && r.description && String(r.description).includes(String(rec.number))) ||
+        // exact number match
+        (r.number && rec.number && String(r.number) === String(rec.number)) ||
+        // match by extracted invoice ref token (e.g., INV-1234) or digits-only match
+        (invoiceRef && rec.number && String(rec.number).includes(invoiceRef)) ||
+        (invoiceDigits && rec.number && String(rec.number).includes(invoiceDigits))
+      ));
+      // Fallback: match by amount + date proximity (within 1 day) when invoice token is missing
+      if (!linked) {
+        try {
+          const amount = Number(r.amount || 0);
+          if (!isNaN(amount) && amount > 0 && r.date) {
+            const rDate = new Date(r.date).getTime();
+            const candidate = merged.find(rec => rec.type === 'invoice' && Math.abs((Number(rec.amount)||0) - amount) < 0.01 && rec.date && Math.abs(new Date(rec.date).getTime() - rDate) <= (24*60*60*1000));
+            if (candidate) return candidate.patientName || resolvePatientDisplay(patients, candidate.patientId) || candidate.patientId || 'N/A';
+          }
+        } catch (e) { /* ignore */ }
+      }
+      if (linked) return linked.patientName || resolvePatientDisplay(patients, linked.patientId) || linked.patientId || 'N/A';
+    } catch (e) { /* ignore */ }
+    return 'N/A';
+  };
+
+  // When a record is selected for details, attempt async resolution if sync lookup fails
+  useEffect(() => {
+    let mounted = true;
+    const tryResolveAsync = async () => {
+      if (!selectedRecord) { setDisplayedPatientName(''); return; }
+      const sync = resolveDisplayPatientName(selectedRecord);
+      if (sync && sync !== 'N/A') {
+        setDisplayedPatientName(sync);
+        return;
+      }
+
+      // Attempt to fetch invoices from server and find matching invoice
+      try {
+        const invoices = await fetchInvoices().catch(() => []);
+        const invoiceRef = extractInvoiceReference(selectedRecord.description || selectedRecord.number || '');
+        const invoiceDigits = invoiceRef ? (invoiceRef.match(/(\d+)/)?.[0]) : null;
+        const matched = (invoices || []).find((inv: any) => {
+          const invNum = String(inv.invoiceNumber || inv.number || inv._id || '');
+          if (!invNum) return false;
+          if (invoiceRef && invNum.includes(invoiceRef)) return true;
+          if (invoiceDigits && invNum.includes(invoiceDigits)) return true;
+          // numeric-only fallback
+          const desc = String(selectedRecord.description || '');
+          if (desc.includes(invNum)) return true;
+          return false;
+        });
+        if (mounted) {
+          if (matched) {
+            const name = matched.patientName || matched.patient || (matched.patientInfo && matched.patientInfo.name) || '';
+            setDisplayedPatientName(name || 'N/A');
+            return;
+          }
+        }
+      } catch (e) {
+        /* ignore */
+      }
+
+      // last resort: leave as N/A
+      if (mounted) setDisplayedPatientName('N/A');
+    };
+
+    tryResolveAsync();
+    return () => { mounted = false; };
+  }, [selectedRecord, patients]);
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'completed': return 'bg-green-100 text-green-800';
@@ -352,10 +545,113 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
     
     const matchesFilter = selectedFilter === 'all' || record.type === selectedFilter;
     
-    const matchesPatient = selectedPatientId === '' || record.patientId === selectedPatientId;
+    const matchesPatient = selectedPatientId === 'all' || selectedPatientId === '' || record.patientId === selectedPatientId;
     
     return matchesSearch && matchesFilter && matchesPatient;
   });
+
+  // Group records into Completed / Pending / Voided (voided = cancelled | refunded)
+  const groupedRecords = {
+    completed: filteredRecords.filter(r => r.status === 'completed'),
+    pending: filteredRecords.filter(r => r.status === 'pending'),
+    voided: filteredRecords.filter(r => r.status === 'cancelled' || r.status === 'refunded')
+  };
+
+  // Render single record card (kept as function to reuse for grouped lists)
+  const renderRecordCard = (record: BillingRecord) => (
+    <div className="border rounded-lg p-4 hover:bg-gray-50 transition-colors">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <div className="p-2 bg-[#358E83]/10 rounded-lg">
+            {getTypeIcon(record.type)}
+          </div>
+          <div className="flex-1">
+            <div className="flex items-center gap-2 mb-1">
+              <h3 className="font-semibold">{record.number}</h3>
+              <Badge className={getTypeColor(record.type)}>
+                {record.type.charAt(0).toUpperCase() + record.type.slice(1)}
+              </Badge>
+              <Badge className={getStatusColor(record.status)}>
+                {record.status.charAt(0).toUpperCase() + record.status.slice(1)}
+              </Badge>
+            </div>
+            <div className="flex items-center gap-4 text-sm text-gray-600">
+              <div className="flex items-center gap-1">
+                <User size={14} />
+                <span>{record.patientName || resolvePatientDisplay(patients, record.patientId) || record.patientId || 'N/A'}</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <Calendar size={14} />
+                <span>
+                  {new Date(record.date).toLocaleDateString()}
+                  {record.time && <span className="ml-1 text-gray-500">• {record.time}</span>}
+                </span>
+              </div>
+              {record.department && (
+                <Badge variant="outline">{record.department}</Badge>
+              )}
+              {record.paymentMethod && (
+                <Badge variant="outline">{record.paymentMethod}</Badge>
+              )}
+            </div>
+            <p className="text-sm text-gray-700 mt-1">{record.description}</p>
+
+            {/* Show detailed items for pharmacy transactions */}
+            {record.type === 'pharmacy' && record.items && record.items.length > 0 && (
+              <div className="mt-3 p-3 bg-purple-50 rounded-lg">
+                <h4 className="font-medium text-purple-800 mb-2 flex items-center gap-1">
+                  <Pill size={14} />
+                  Medications Purchased:
+                </h4>
+                <div className="space-y-1">
+                  {record.items.map((item) => (
+                    <div key={item.id} className="flex justify-between text-sm">
+                      <span className="text-purple-700">
+                        {item.description} (Qty: {item.quantity || 0})
+                      </span>
+                      <span className="font-medium text-purple-800">
+                        ₱{(item.totalPrice || item.amount || 0).toLocaleString()}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                {record.pharmacyData && (
+                  <div className="mt-2 pt-2 border-t border-purple-200">
+                    <div className="flex justify-between text-xs text-purple-600">
+                      <span>Pharmacy: {record.pharmacyData.pharmacyName}</span>
+                      {record.pharmacyData.doctorName && (
+                        <span>Prescribed by: {record.pharmacyData.doctorName}</span>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center gap-4">
+          <div className="text-right">
+            <div className="font-semibold text-lg">₱{(record.amount || 0).toLocaleString()}</div>
+            {record.type === 'pharmacy' && record.pharmacyData && (
+              <div className="text-xs text-gray-500">
+                Tax: ₱{(record.pharmacyData.tax || 0).toFixed(2)}
+              </div>
+            )}
+          </div>
+          <Button 
+            variant="ghost" 
+            size="sm"
+            onClick={() => {
+              setSelectedRecord(record);
+              setShowDetailsDialog(true);
+            }}
+          >
+            <Eye size={16} />
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
 
   const allRecords = getMergedBillingRecords();
   
@@ -374,6 +670,41 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
   const pharmacyRevenue = allRecords
     .filter(r => r.status === 'completed' && r.type === 'pharmacy')
     .reduce((sum, record) => sum + record.amount, 0);
+
+  // Calculate payment methods distribution
+  const getPaymentMethodsDistribution = () => {
+    const paymentRecords = allRecords.filter(r => r.type === 'payment' && r.status === 'completed');
+    const methods: { [key: string]: number } = {};
+    
+    paymentRecords.forEach(record => {
+      const method = record.paymentMethod || 'cash';
+      methods[method] = (methods[method] || 0) + record.amount;
+    });
+    
+    return methods;
+  };
+
+  const paymentMethodsData = getPaymentMethodsDistribution();
+  const totalPaymentAmount = Object.values(paymentMethodsData).reduce((sum, amount) => sum + amount, 0);
+  const paymentMethodsPercentage = Object.entries(paymentMethodsData).map(([method, amount]) => ({
+    method,
+    amount,
+    percentage: totalPaymentAmount > 0 ? Math.round((amount / totalPaymentAmount) * 100) : 0
+  }));
+
+  // Calculate department revenue
+  const getDepartmentRevenue = () => {
+    const departments: { [key: string]: number } = {};
+    
+    allRecords.filter(r => r.status === 'completed' && (r.type === 'invoice' || r.type === 'service')).forEach(record => {
+      const dept = record.department || 'Other';
+      departments[dept] = (departments[dept] || 0) + record.amount;
+    });
+    
+    return departments;
+  };
+
+  const departmentRevenue = getDepartmentRevenue();
 
   // Export billing data to CSV
   const handleExport = () => {
@@ -418,23 +749,49 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
   };
 
   // Clear all billing records (local in-memory) — confirmation required
-  const handleClearConfirm = () => {
+  const handleClearConfirm = async () => {
     try {
-  // suppress remote sync so UI stays cleared until user explicitly refreshes
-  setSuppressRemoteSync(true);
-  suppressRemoteRef.current = true;
-  billingService.setRemoteSyncSuppressed(true);
-  // clear local billing records after suppression is set to avoid triggering a remote reload
-  // use silent clear to avoid notifying subscribers immediately
-  billingService.clearAllRecords({ notify: false });
+      // require explicit confirmation for destructive action
+      if (isAdmin) {
+        const confirmation = window.prompt('Type DELETE to permanently delete ALL invoices and payments from the server and local cache');
+        if (confirmation !== 'DELETE') {
+          toast.error('Clear cancelled: confirmation mismatch');
+          setShowClearDialog(false);
+          return;
+        }
+
+        // Attempt server-side permanent delete (preferred). Fall back will be caught.
+        const invRes = await fetch(`/api/invoices/clear-all`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' } });
+        if (!invRes.ok) throw new Error('Failed to delete server invoices');
+        const payRes = await fetch(`/api/payments/clear-all`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' } });
+        if (!payRes.ok) throw new Error('Failed to delete server payments');
+      } else {
+        // Non-admins: use a simple OK / Cancel confirmation (no input box)
+        const confirmed = window.confirm('Clear local transaction history? This will remove all local records shown here. Click OK to proceed or Cancel to abort.');
+        if (!confirmed) {
+          toast.error('Clear cancelled');
+          setShowClearDialog(false);
+          return;
+        }
+      }
+
+      // Persist a flag so subsequent refreshes stay empty
+      try { localStorage.setItem(CLEARED_FLAG, 'true'); } catch (e) { /* ignore */ }
+
+      // Suppress remote sync in billingService so UI remains cleared
+      setSuppressRemoteSync(true);
+      suppressRemoteRef.current = true;
+      billingService.setRemoteSyncSuppressed(true);
+
+      // Clear local records and notify subscribers
+      billingService.clearAllRecords({ notify: true });
       setBillingRecords([]);
       setPharmacyTransactions([]);
-      // notify other modules that billing was cleared
       try { window.dispatchEvent(new CustomEvent('billing-cleared', { detail: { source: 'billing-history' } })); } catch (e) {}
-      toast?.success?.('Transaction history cleared');
+      toast.success('Transaction history cleared');
     } catch (e) {
       console.error('Failed to clear billing records', e);
-      toast?.error?.('Failed to clear transaction history');
+      toast.error('Failed to clear transaction history');
     } finally {
       setShowClearDialog(false);
     }
@@ -827,7 +1184,7 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
             }
             .amount-row {
               display: flex;
-              justify-between;
+              justify-content: space-between;
               padding: 6px 0;
               font-size: 14px;
             }
@@ -1018,17 +1375,7 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
 
   return (
     <div className="space-y-6">
-      {suppressRemoteSync && (
-        <div className="p-4 bg-yellow-50 border-l-4 border-yellow-300 rounded"> 
-          <div className="flex items-center justify-between">
-            <div className="text-sm text-yellow-800">Local transaction history cleared. Server-side records are hidden until you refresh.</div>
-            <div className="flex items-center gap-2">
-              <Button variant="ghost" onClick={() => { setSuppressRemoteSync(false); suppressRemoteRef.current = false; billingService.setRemoteSyncSuppressed(false); loadRemote().catch(()=>{}); }}>Show Server Records</Button>
-              <Button onClick={() => { setSuppressRemoteSync(false); suppressRemoteRef.current = false; billingService.setRemoteSyncSuppressed(false); setSearchTerm(''); setSelectedFilter('all'); loadRemote().catch(()=>{}); }} className="bg-[#358E83] text-white">Refresh</Button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Remote sync is auto-enabled on mount; no banner required. */}
       <div className="flex items-center justify-end">
         <div className="flex gap-2">
           <Button variant="outline" onClick={handleExport}>
@@ -1062,7 +1409,7 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
                     <SelectValue placeholder="Filter by patient (optional)" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">All Patients</SelectItem>
+                    <SelectItem value="all">All Patients</SelectItem>
                     {patients.map((patient) => (
                       <SelectItem key={patient.id} value={patient.id}>
                         {patient.fullDisplay}
@@ -1165,13 +1512,13 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
                 <Search className="mr-2 text-gray-400" size={16} />
                 <Input 
                   placeholder="Search records..." 
-                  className="border-0 p-0 focus-visible:ring-0"
+                  className="border-0 p-0 focus-visible:ring-0 text-gray-900 placeholder:text-gray-500"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                 />
               </div>
               <Select value={selectedFilter} onValueChange={setSelectedFilter}>
-                <SelectTrigger className="w-40">
+                <SelectTrigger className="w-40 text-gray-900">
                   <SelectValue placeholder="Filter by type" />
                 </SelectTrigger>
                 <SelectContent>
@@ -1193,108 +1540,13 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
             </TabsList>
 
             <TabsContent value="list">
-              <div className="space-y-4">
-                {filteredRecords.map((record) => (
-                  <div key={record.id} className="border rounded-lg p-4 hover:bg-gray-50 transition-colors">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-4">
-                        <div className="p-2 bg-[#358E83]/10 rounded-lg">
-                          {getTypeIcon(record.type)}
-                        </div>
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-1">
-                            <h3 className="font-semibold">{record.number}</h3>
-                            <Badge className={getTypeColor(record.type)}>
-                              {record.type.charAt(0).toUpperCase() + record.type.slice(1)}
-                            </Badge>
-                            <Badge className={getStatusColor(record.status)}>
-                              {record.status.charAt(0).toUpperCase() + record.status.slice(1)}
-                            </Badge>
-                          </div>
-                          <div className="flex items-center gap-4 text-sm text-gray-600">
-                            <div className="flex items-center gap-1">
-                              <User size={14} />
-                              <span>{resolvePatientDisplay(patients, record.patientId) || record.patientName || record.patientId || 'N/A'}</span>
-                            </div>
-                            <div className="flex items-center gap-1">
-                              <Calendar size={14} />
-                              <span>
-                                {new Date(record.date).toLocaleDateString()}
-                                {record.time && <span className="ml-1 text-gray-500">• {record.time}</span>}
-                              </span>
-                            </div>
-                            {record.department && (
-                              <Badge variant="outline">{record.department}</Badge>
-                            )}
-                            {record.paymentMethod && (
-                              <Badge variant="outline">{record.paymentMethod}</Badge>
-                            )}
-                          </div>
-                          <p className="text-sm text-gray-700 mt-1">{record.description}</p>
-                          
-                          {/* Show detailed items for pharmacy transactions */}
-                          {record.type === 'pharmacy' && record.items && record.items.length > 0 && (
-                            <div className="mt-3 p-3 bg-purple-50 rounded-lg">
-                              <h4 className="font-medium text-purple-800 mb-2 flex items-center gap-1">
-                                <Pill size={14} />
-                                Medications Purchased:
-                              </h4>
-                              <div className="space-y-1">
-                                {record.items.map((item) => (
-                                  <div key={item.id} className="flex justify-between text-sm">
-                                    <span className="text-purple-700">
-                                      {item.description} (Qty: {item.quantity})
-                                    </span>
-                                    <span className="font-medium text-purple-800">
-                                      ₱{item.totalPrice.toLocaleString()}
-                                    </span>
-                                  </div>
-                                ))}
-                              </div>
-                              {record.pharmacyData && (
-                                <div className="mt-2 pt-2 border-t border-purple-200">
-                                  <div className="flex justify-between text-xs text-purple-600">
-                                    <span>Pharmacy: {record.pharmacyData.pharmacyName}</span>
-                                    {record.pharmacyData.doctorName && (
-                                      <span>Prescribed by: {record.pharmacyData.doctorName}</span>
-                                    )}
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-4">
-                        <div className="text-right">
-                          <div className="font-semibold text-lg">₱{record.amount.toLocaleString()}</div>
-                          {record.type === 'pharmacy' && record.pharmacyData && (
-                            <div className="text-xs text-gray-500">
-                              Tax: ₱{record.pharmacyData.tax.toFixed(2)}
-                            </div>
-                          )}
-                        </div>
-                        <Button 
-                          variant="ghost" 
-                          size="sm"
-                          onClick={() => {
-                            setSelectedRecord(record);
-                            setShowDetailsDialog(true);
-                          }}
-                        >
-                          <Eye size={16} />
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-                
-                {filteredRecords.length === 0 && (
+              <div className="space-y-6">
+                { (groupedRecords.completed.length + groupedRecords.pending.length + groupedRecords.voided.length) === 0 ? (
                   <div className="text-center py-12">
                     <History className="mx-auto text-gray-400 mb-4" size={48} />
                     <h3 className="text-lg font-medium text-gray-900 mb-2">No records found</h3>
                     <p className="text-gray-600">
-                      {selectedPatientId ? 
+                      {selectedPatientId && selectedPatientId !== 'all' ? 
                         'No billing records found for the selected patient.' : 
                         'Try adjusting your search criteria or filters.'
                       }
@@ -1306,6 +1558,44 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
                       </div>
                     )}
                   </div>
+                ) : (
+                  <>
+                    {/* Completed */}
+                    {groupedRecords.completed.length > 0 && (
+                      <div>
+                        <h4 className="text-lg font-semibold mb-2">Completed ({groupedRecords.completed.length})</h4>
+                        <div className="space-y-4">
+                          {groupedRecords.completed.map(r => (
+                            <div key={r.id}>{renderRecordCard(r)}</div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Pending */}
+                    {groupedRecords.pending.length > 0 && (
+                      <div>
+                        <h4 className="text-lg font-semibold mt-4 mb-2">Pending ({groupedRecords.pending.length})</h4>
+                        <div className="space-y-4">
+                          {groupedRecords.pending.map(r => (
+                            <div key={r.id}>{renderRecordCard(r)}</div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Voided / Cancelled */}
+                    {groupedRecords.voided.length > 0 && (
+                      <div>
+                        <h4 className="text-lg font-semibold mt-4 mb-2">Voided ({groupedRecords.voided.length})</h4>
+                        <div className="space-y-4">
+                          {groupedRecords.voided.map(r => (
+                            <div key={r.id}>{renderRecordCard(r)}</div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             </TabsContent>
@@ -1329,7 +1619,7 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
                         <div className="text-sm text-gray-600">Total: <span className="font-semibold">₱{chartSeries.reduce((s,n)=> s + n, 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</span></div>
                       </div>
 
-                      <div className="h-64 w-full p-2">
+                      <div className="h-64 w-full p-4 flex flex-col">
                         {chartSeries.length === 0 || chartSeries.every(v => v === 0) ? (
                           <div className="h-full flex items-center justify-center bg-gray-50 rounded-lg">
                             <div className="text-center">
@@ -1338,24 +1628,41 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
                             </div>
                           </div>
                         ) : (
-                          <div className="h-full w-full flex items-end space-x-2">
-                            {/* Simple SVG bars */}
-                            {(() => {
-                              const max = Math.max(...chartSeries, 1);
-                              return chartSeries.map((val, idx) => {
-                                const heightPct = (val / max) * 100;
-                                return (
-                                  <div key={idx} className="flex-1 flex flex-col items-center"> 
-                                    <div className="w-full h-full flex items-end">
-                                      {/* eslint-disable-next-line */}
-                                      <div title={`₱${val.toLocaleString('en-PH', { minimumFractionDigits: 2 })}`} style={{ height: `${heightPct}%` }} className="w-full bg-[#358E83] rounded-t-md" />
+                          <>
+                            {/* Chart bars */}
+                            <div className="flex-1 flex items-end justify-around gap-1 px-2 py-4">
+                              {(() => {
+                                const max = Math.max(...chartSeries, 1);
+                                return chartSeries.map((val, idx) => {
+                                  const heightPct = (val / max) * 100;
+                                  return (
+                                    <div key={idx} className="flex-1 flex flex-col items-center gap-1">
+                                      <div className="w-full h-full flex items-end justify-center" style={{ minHeight: '3rem' }}>
+                                        <div
+                                          title={`₱${val.toLocaleString('en-PH', { minimumFractionDigits: 2 })}`}
+                                          style={{ height: `${Math.max(heightPct, 5)}%`, backgroundColor: '#358E83' }}
+                                          className="w-3/4 rounded-t-md transition-colors"
+                                        />
+                                      </div>
+                                      {val > 0 && (
+                                        <div className="text-xs font-semibold text-gray-700 whitespace-nowrap">
+                                          ₱{(val / 1000).toFixed(0)}k
+                                        </div>
+                                      )}
                                     </div>
-                                    <div className="text-xs text-gray-600 mt-2">{chartLabels[idx]}</div>
-                                  </div>
-                                );
-                              });
-                            })()}
-                          </div>
+                                  );
+                                });
+                              })()}
+                            </div>
+                            {/* Chart labels */}
+                            <div className="flex items-start justify-around gap-1 px-2 border-t pt-2">
+                              {chartLabels.map((label, idx) => (
+                                <div key={idx} className="flex-1 flex justify-center">
+                                  <span className="text-xs text-gray-600 text-center">{label}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </>
                         )}
                       </div>
                     </div>
@@ -1370,34 +1677,24 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
                   </CardHeader>
                   <CardContent>
                     <div className="space-y-3">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <div className="w-3 h-3 bg-blue-500 rounded-full"></div>
-                          <span>GCash</span>
-                        </div>
-                        <span className="font-medium">45%</span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <div className="w-3 h-3 bg-green-500 rounded-full"></div>
-                          <span>Credit Card</span>
-                        </div>
-                        <span className="font-medium">30%</span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <div className="w-3 h-3 bg-yellow-500 rounded-full"></div>
-                          <span>Cash</span>
-                        </div>
-                        <span className="font-medium">15%</span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <div className="w-3 h-3 bg-purple-500 rounded-full"></div>
-                          <span>PayMaya</span>
-                        </div>
-                        <span className="font-medium">10%</span>
-                      </div>
+                      {paymentMethodsPercentage.length > 0 ? (
+                        paymentMethodsPercentage.map((item, idx) => (
+                          <div key={idx} className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <div 
+                                className="w-3 h-3 rounded-full"
+                                style={{
+                                  backgroundColor: ['#3B82F6', '#10B981', '#F59E0B', '#8B5CF6'][idx % 4]
+                                }}
+                              ></div>
+                              <span className="capitalize">{item.method}</span>
+                            </div>
+                            <span className="font-medium">{item.percentage}%</span>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-sm text-gray-500 text-center py-4">No payment data available</p>
+                      )}
                     </div>
                   </CardContent>
                 </Card>
@@ -1410,20 +1707,30 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
                   </CardHeader>
                   <CardContent>
                     <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                      <div className="text-center p-4 bg-blue-50 rounded-lg">
-                        <div className="text-2xl font-bold text-blue-600">₱58,800</div>
-                        <div className="text-sm text-gray-600">Surgery</div>
-                      </div>
-                      <div className="text-center p-4 bg-green-50 rounded-lg">
-                        <div className="text-2xl font-bold text-green-600">₱29,400</div>
-                        <div className="text-sm text-gray-600">Outpatient</div>
-                      </div>
-                      <div className="text-center p-4 bg-orange-50 rounded-lg">
-                        <div className="text-2xl font-bold text-orange-600">₱15,600</div>
-                        <div className="text-sm text-gray-600">Radiology</div>
-                      </div>
+                      {Object.entries(departmentRevenue).length > 0 ? (
+                        Object.entries(departmentRevenue).map(([dept, revenue], idx) => (
+                          <div key={idx} className="text-center p-4 rounded-lg" style={{
+                            backgroundColor: ['bg-blue-50', 'bg-green-50', 'bg-orange-50', 'bg-purple-50'][idx % 4]
+                          }}>
+                            <div className="text-2xl font-bold" style={{
+                              color: ['#2563EB', '#059669', '#EA580C', '#7C3AED'][idx % 4]
+                            }}>
+                              ₱{revenue.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </div>
+                            <div className="text-sm text-gray-600">{dept}</div>
+                          </div>
+                        ))
+                      ) : (
+                        <>
+                          <div className="text-center p-4 bg-blue-50 rounded-lg">
+                            <div className="text-2xl font-bold text-blue-600">₱0.00</div>
+                            <div className="text-sm text-gray-600">No Data</div>
+                          </div>
+                        </>
+                      )}
+                      {/* Pharmacy is always shown */}
                       <div className="text-center p-4 bg-purple-50 rounded-lg">
-                        <div className="text-2xl font-bold text-purple-600">₱{pharmacyRevenue.toLocaleString()}</div>
+                        <div className="text-2xl font-bold text-purple-600">₱{pharmacyRevenue.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
                         <div className="text-sm text-gray-600 flex items-center justify-center gap-1">
                           <Pill size={14} />
                           Pharmacy
@@ -1456,7 +1763,7 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <p className="text-sm text-gray-600">Transaction Number</p>
-                  <p className="font-semibold">{selectedRecord.number}</p>
+                  <p className="font-semibold">{formatTransactionNumber(selectedRecord)}</p>
                 </div>
                 <div>
                   <p className="text-sm text-gray-600">Type</p>
@@ -1466,7 +1773,7 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
                 </div>
                 <div>
                   <p className="text-sm text-gray-600">Patient</p>
-                  <p className="font-semibold">{resolvePatientDisplay(patients, selectedRecord.patientId) || selectedRecord.patientName || selectedRecord.patientId || 'N/A'}</p>
+                  <p className="font-semibold">{displayedPatientName || 'N/A'}</p>
                 </div>
                 <div>
                   <p className="text-sm text-gray-600">Date</p>
@@ -1521,8 +1828,8 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
                           <tr key={item.id} className="border-t">
                             <td className="px-4 py-2 text-sm">{item.description}</td>
                             <td className="px-4 py-2 text-sm text-right">{item.quantity}</td>
-                            <td className="px-4 py-2 text-sm text-right">₱{item.unitPrice.toLocaleString()}</td>
-                            <td className="px-4 py-2 text-sm text-right font-medium">₱{item.totalPrice.toLocaleString()}</td>
+                            <td className="px-4 py-2 text-sm text-right">₱{(item.unitPrice || item.rate || 0).toLocaleString()}</td>
+                            <td className="px-4 py-2 text-sm text-right font-medium">₱{(item.totalPrice || item.amount || 0).toLocaleString()}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -1551,7 +1858,7 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
                     )}
                     <div>
                       <p className="text-purple-700">Tax</p>
-                      <p className="font-medium text-purple-900">₱{selectedRecord.pharmacyData.tax.toFixed(2)}</p>
+                      <p className="font-medium text-purple-900">₱{(selectedRecord.pharmacyData.tax || 0).toFixed(2)}</p>
                     </div>
                     <div>
                       <p className="text-purple-700">Payment Status</p>
@@ -1585,12 +1892,12 @@ export function BillingHistory({ onNavigateToView }: BillingHistoryProps) {
                     <span className="text-gray-700">
                       VAT {selectedRecord.taxRate && `(${selectedRecord.taxRate}%)`}:
                     </span>
-                    <span className="font-medium">₱{selectedRecord.tax.toLocaleString()}</span>
+                    <span className="font-medium">₱{(selectedRecord.tax || 0).toLocaleString()}</span>
                   </div>
                 )}
                 <div className="flex justify-between pt-2 border-t border-gray-200">
                   <span className="text-gray-900 font-medium">Total Amount:</span>
-                  <span className="font-bold text-lg text-[#358E83]">₱{selectedRecord.amount.toLocaleString()}</span>
+                  <span className="font-bold text-lg text-[#358E83]">₱{(selectedRecord.amount || 0).toLocaleString()}</span>
                 </div>
               </div>
 

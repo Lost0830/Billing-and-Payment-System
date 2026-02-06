@@ -1,11 +1,11 @@
 import mongoose from "mongoose";
-import bcrypt from "bcryptjs";
 
 const userSchema = new mongoose.Schema(
   {
     name: { type: String, required: true },
     email: { type: String, required: true, unique: true },
     password: { type: String, required: true },
+    userId: { type: String, unique: true },
     role: { type: String, default: "user" },
     department: { type: String, default: "General" },
     status: { type: String, default: "Active" },
@@ -18,30 +18,22 @@ const userSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Hash password before saving
-userSchema.pre('save', async function(next) {
-  if (!this.isModified('password')) {
-    console.log('Password not modified, skipping hash');
-    return next();
+// Ensure userId exists to satisfy unique index if present
+userSchema.pre('save', function(next) {
+  if (!this.userId || String(this.userId).trim() === '') {
+    const ts = Date.now();
+    const rand = Math.floor(Math.random() * 1000);
+    this.userId = `USR${String(ts).slice(-6)}${String(rand).padStart(3, '0')}`;
   }
-  
-  try {
-    console.log('Hashing password for user:', this.email);
-    const salt = await bcrypt.genSalt(10);
-    this.password = await bcrypt.hash(this.password, salt);
-    console.log('Password hashed successfully');
-    next();
-  } catch (error) {
-    console.error('Error hashing password:', error);
-    next(error);
-  }
+  next();
 });
 
-// Method to compare password for login
-userSchema.methods.comparePassword = async function(candidatePassword) {
+// Method to compare password for login (plain text comparison)
+userSchema.methods.comparePassword = function(candidatePassword) {
   console.log('Comparing passwords for user:', this.email);
-  console.log('Stored password hash:', this.password);
-  const isMatch = await bcrypt.compare(candidatePassword, this.password);
+  console.log('Stored password:', this.password);
+  console.log('Input password:', candidatePassword);
+  const isMatch = this.password === candidatePassword;
   console.log('Password match result:', isMatch);
   return isMatch;
 };

@@ -31,15 +31,15 @@ import { DiscountService, DiscountOption } from "../services/discountService";
 import { PriceListService } from "../services/priceListService";
 import { toast } from "sonner";
 import { fetchPayments, fetchPatients, fetchInvoices, fetchInvoice } from "../services/api.js";
-import { MockEmrService } from "../services/mockEmrData";
 import { UserSession } from "../hooks/useAuth";
 import axios from "axios";
 import { getDisplayPatientId, getInternalPatientKey, normalizePatients, resolvePatientDisplay } from "../utils/patientId";
 import { billingService } from "../services/billingService";
 import { computeInvoiceSubtotal } from "../utils/invoiceUtils";
+import { TransactionRecord } from "./TransactionRecord";
 
 
-const API_URL = "http://localhost:5000/api";
+const API_URL = "http://localhost:5002/api";
 
 interface PaymentProcessingProps {
   onNavigateToView: (view: string) => void;
@@ -49,6 +49,7 @@ interface PaymentProcessingProps {
 interface Payment {
   _id?: string;
   id?: string;
+  transactionId?: string;
   invoiceNumber: string;
   patientName: string;
   patientId: string;
@@ -75,10 +76,8 @@ interface Payment {
 
 const PAYMENT_METHODS = [
   { id: 'cash', name: 'Cash Payment', icon: Banknote, color: 'text-green-600' },
-  { id: 'card', name: 'Credit/Debit Card', icon: CreditCard, color: 'text-blue-600' },
   { id: 'gcash', name: 'GCash', icon: Smartphone, color: 'text-blue-500' },
-  { id: 'paymaya', name: 'PayMaya', icon: Smartphone, color: 'text-green-500' },
-  { id: 'bank', name: 'Bank Transfer', icon: Receipt, color: 'text-purple-600' }
+  { id: 'paymaya', name: 'PayMaya', icon: Smartphone, color: 'text-green-500' }
 ];
 
 export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
@@ -160,15 +159,17 @@ export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
     const date = rawDate;
     const time = p.time || (date ? new Date(date).toLocaleTimeString() : "");
     const reference = p.reference || p.ref || "";
+    const transactionId = p.transactionId || "";
     const items = Array.isArray(p.items) ? p.items : (Array.isArray(p.lines) ? p.lines : []);
 
     return {
       _id: p._id,
       id,
+      transactionId,
       invoiceNumber,
       patientName,
-  patientId,
-  amount,
+      patientId,
+      amount,
       subtotal,
       discount,
       tax,
@@ -207,29 +208,30 @@ export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
 
   const fetchInvoicesFromDb = async () => {
     try {
-      if (typeof fetchInvoices === "function") {
-        const invs: any = await fetchInvoices();
-        const arr = Array.isArray(invs) ? invs : (invs?.data || []);
-        // normalize patientId to prefer friendly id when possible using patients state if already loaded
-        const normalized = arr.map((inv:any) => {
-          const pid = inv.patientId || inv.accountId || inv.patient || '';
-          // try to resolve friendly patient id from loaded patients
-          const found = (Array.isArray(patients) ? patients.find((p:any) => String(getInternalPatientKey(p)) === String(pid)) : null);
-          if (found) inv.patientId = getDisplayPatientId(found) || getInternalPatientKey(found) || inv.patientId;
-          return inv;
-        });
-        setAvailableInvoices(normalized);
-        return;
-      }
-  const res = await axios.get(`${API_URL}/invoices`);
-  const payload: any = res?.data;
-  const arr = Array.isArray(payload) ? payload : (payload?.data || []);
-      const normalized = arr.map((inv:any) => {
+      // Use combined endpoint to get invoices from all sources (billing, pharmacy, EMR)
+      // Only fetch pending/unpaid invoices for payment processing
+      const res = await axios.get(`${API_URL}/invoices/combined`).catch(() => 
+        axios.get(`${API_URL}/invoices`).catch(() => ({ data: { success: false, data: [] } }))
+      );
+      
+      const payload: any = res?.data;
+      const arr = Array.isArray(payload) ? payload : (payload?.data || []);
+      
+      // Filter to only show pending/unpaid invoices (exclude already paid)
+      const pendingInvoices = arr.filter((inv: any) => {
+        const status = (inv.status || '').toLowerCase();
+        return status === 'pending' || status === 'draft' || status === 'sent' || status === 'unpaid';
+      });
+      
+      // Normalize patientId to prefer friendly id when possible using patients state if already loaded
+      const normalized = pendingInvoices.map((inv:any) => {
         const pid = inv.patientId || inv.accountId || inv.patient || '';
+        // try to resolve friendly patient id from loaded patients
         const found = (Array.isArray(patients) ? patients.find((p:any) => String(getInternalPatientKey(p)) === String(pid)) : null);
         if (found) inv.patientId = getDisplayPatientId(found) || getInternalPatientKey(found) || inv.patientId;
         return inv;
       });
+      
       setAvailableInvoices(normalized);
     } catch (err) {
       console.error("Error fetching invoices", err);
@@ -430,20 +432,30 @@ export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Load EMR/mock data for the selected patient when invoice selection changes
+  // Load EMR data for the selected patient when invoice selection changes
   useEffect(() => {
-    try {
-      const pkey = newPayment.patientId || '';
-      if (!pkey) {
+    const loadEmrData = async () => {
+      try {
+        const pkey = newPayment.patientId || '';
+        if (!pkey) {
+          setEmrData(null);
+          return;
+        }
+        // Fetch real EMR data from API
+        const emrResponse = await axios.get(`${API_URL}/emr/appointments`, {
+          params: { patientId: pkey }
+        });
+        if (emrResponse.data.success && emrResponse.data.data) {
+          setEmrData(emrResponse.data.data);
+        } else {
+          setEmrData(null);
+        }
+      } catch (e) {
+        console.warn('Failed to load EMR data for patient', e);
         setEmrData(null);
-        return;
       }
-      const data = MockEmrService.getPatientEmrData(pkey);
-      setEmrData(data);
-    } catch (e) {
-      console.warn('Failed to load EMR data for patient', e);
-      setEmrData(null);
-    }
+    };
+    loadEmrData();
   }, [newPayment.patientId, selectedInvoiceNumber]);
 
   // If the app provided an invoice id/number via localStorage, pick it when invoices load
@@ -719,8 +731,32 @@ export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
       }
 
       // mark invoice as paid/completed (best-effort)
+      // For combined invoices, we need to mark the source invoices as paid
       try {
-        await axios.put(`${API_URL}/invoices/${invoiceId}`, { status: "paid" });
+        if (selInvoice?.source === 'combined' || selInvoice?.combinedFrom) {
+          // If it's a combined invoice, mark all source invoices as paid
+          const sourceInvoices = selInvoice.combinedFrom || [];
+          for (const sourceInv of sourceInvoices) {
+            try {
+              // Try to update each source invoice
+              if (sourceInv.startsWith('PH-')) {
+                // Pharmacy sale - would need a mark-paid endpoint
+                await axios.post(`${API_URL}/pharmacy/sales/${selInvoice.id}/mark-paid`).catch(() => {});
+              } else if (sourceInv.startsWith('EMR-')) {
+                // EMR appointment - would need a mark-paid endpoint
+                await axios.post(`${API_URL}/emr/appointments/${selInvoice.id}/mark-paid`).catch(() => {});
+              } else {
+                // Billing invoice
+                await axios.put(`${API_URL}/invoices/${invoiceId}`, { status: "paid" }).catch(() => {});
+              }
+            } catch (e) {
+              console.warn("Failed to mark source invoice as paid:", e);
+            }
+          }
+        } else {
+          // Regular invoice update
+          await axios.put(`${API_URL}/invoices/${invoiceId}`, { status: "paid" });
+        }
       } catch (e) {
         // non-fatal if backend doesn't expose this route
         console.warn("updateInvoice failed (non-fatal):", e);
@@ -760,7 +796,8 @@ export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
           reference: normalized.reference || normalized.ref || '',
           date: normalized.date || new Date().toISOString(),
           time: normalized.time || (normalized.date ? new Date(normalized.date).toLocaleTimeString() : undefined),
-          status: (normalized.status as any) || 'completed'
+          status: (normalized.status as any) || 'completed',
+          transactionId: normalized.transactionId || ''
         });
       } catch (e) {
         console.warn('billingService.addPaymentRecord failed', e);
@@ -772,6 +809,16 @@ export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
       // refresh lists
       await fetchPaymentsFromDb();
       await fetchInvoicesFromDb();
+
+      // Add notification
+      const { notificationService } = await import('../services/notificationService');
+      notificationService.addNotification({
+        type: 'success',
+        title: 'Payment Processed',
+        message: `Payment of ₱${amountValue.toLocaleString()} processed successfully for ${payloadWithItems.patientName || 'patient'}.`,
+        source: 'payment',
+        actionUrl: 'history',
+      });
 
       toast.success("Payment processed");
       setShowConfirmDialog(false);
@@ -803,50 +850,114 @@ export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
       <html>
         <head>
           <meta charset="utf-8" />
-          <title>Payment Receipt - MediCare Hospital</title>
+          <title>Transaction Receipt - MediCare Hospital</title>
           <style>
-            @page { size: A4 landscape; margin: 18mm; }
-            /* Printed typography tuned to match hospital receipt */
+            @page { 
+              size: A4 portrait; 
+              margin: 12mm;
+            }
+            * {
+              box-sizing: border-box;
+            }
             body {
-              font-family: 'Times New Roman', Georgia, serif;
+              font-family: Arial, sans-serif;
               color: #000;
               background: #fff;
-              font-size: 12px;
+              font-size: 11px;
               margin: 0;
               padding: 0;
               -webkit-print-color-adjust: exact;
+              print-color-adjust: exact;
+              line-height: 1.4;
             }
-            .receipt-container {
-              max-width: 1100px;
-              margin: 0 auto;
-              padding: 8px 12px;
+            .transaction-record {
+              max-width: 100%;
+              padding: 0;
+              margin: 0;
             }
-            header .hospital-name { font-size: 22px; font-weight: 700; letter-spacing: 0.5px; }
-            header .hospital-meta { font-size: 11px; color: #333; margin-top: 4px; }
-
-            table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-            thead th { padding: 8px 6px; border-bottom: 2px solid #000; font-weight: 700; text-transform: uppercase; font-size: 12px; }
-            tbody td { padding: 8px 6px; border-bottom: 1px solid #ddd; vertical-align: middle; }
-            td.description { font-size: 12px; }
-            td.amount, .text-right { text-align: right; }
-
-            .category-row td { font-weight: 600; }
-            .totals-row td { font-weight: 700; border-top: 2px solid #000; }
-
-            .grand-total { margin-top: 10px; text-align: right; font-size: 18px; font-weight: 800; }
-
-            .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-            .meta-grid .left, .meta-grid .right { font-size: 12px; }
-
-            .payment-details { margin-top: 14px; border-top: 1px solid #ccc; padding-top: 8px; font-size: 12px; }
-            .payment-details .label { color: #333; font-weight: 600; }
-            .payment-details .value { text-align: right; }
-
-            .footer { margin-top: 18px; text-align: center; font-size: 11px; color: #333; }
+            h1 {
+              font-size: 14px;
+              font-weight: 700;
+              margin: 0 0 2px 0;
+              color: #000;
+            }
+            h2 {
+              font-size: 18px;
+              font-weight: 700;
+              margin: 16px 0;
+              letter-spacing: 1px;
+              text-align: center;
+              color: #000;
+            }
+            h3 {
+              font-size: 11px;
+              font-weight: 700;
+              margin: 8px 0 6px 0;
+              color: #000;
+            }
+            p {
+              margin: 0;
+              font-size: 11px;
+              color: #000;
+            }
+            table {
+              width: 100%;
+              border-collapse: collapse;
+              margin: 10px 0;
+              font-size: 11px;
+            }
+            th {
+              padding: 6px 4px;
+              border-top: 2px solid #000;
+              border-bottom: 2px solid #000;
+              font-weight: 700;
+              text-align: left;
+              font-size: 10px;
+              color: #000;
+            }
+            td {
+              padding: 6px 4px;
+              border-bottom: 1px solid #ccc;
+              color: #000;
+            }
+            .text-right {
+              text-align: right !important;
+            }
+            .text-center {
+              text-align: center !important;
+            }
+            .font-bold {
+              font-weight: 700;
+            }
+            .border-t-2 {
+              border-top: 2px solid #000;
+            }
+            .border-b-2 {
+              border-bottom: 2px solid #000;
+            }
+            .flex {
+              display: flex;
+              justify-content: space-between;
+              margin-bottom: 4px;
+            }
+            .grid {
+              display: grid;
+              grid-template-columns: 1fr 1fr 1fr 1fr;
+              gap: 16px;
+              margin-top: 8px;
+            }
+            .footer-text {
+              text-align: center;
+              margin-top: 12px;
+              padding-top: 8px;
+              border-top: 1px solid #ccc;
+              font-size: 10px;
+              color: #666;
+            }
           </style>
         </head>
         <body>
-          <div class="receipt-container small" style="max-width:1100px; margin:0 auto;">
+          <div class="transaction-record">
             ${receiptContent.innerHTML}
           </div>
         </body>
@@ -893,6 +1004,20 @@ export function PaymentProcessing({ userSession }: PaymentProcessingProps) {
       (payment.reference || "").toLowerCase().includes(searchQuery.toLowerCase());
     const matchesStatus = filterStatus === 'all' || payment.status === filterStatus;
     return matchesSearch && matchesStatus;
+  });
+
+  // Generate sequential TRANS-XXX labels for display when backend transactionId is missing
+  const sortedForLabel = payments.slice().sort((a: any, b: any) => {
+    const ta = new Date(a.date || a.createdAt || 0).getTime();
+    const tb = new Date(b.date || b.createdAt || 0).getTime();
+    return ta - tb;
+  });
+  const transIdByKey = new Map<string, string>();
+  sortedForLabel.forEach((p: any, idx: number) => {
+    const key = String(p._id || p.id || `${p.invoiceNumber || ''}-${p.date || ''}-${p.amount || ''}`);
+    const existing = p.transactionId && /^TRANS-\d+$/i.test(String(p.transactionId)) ? String(p.transactionId) : '';
+    const gen = `TRANS-${String(idx + 1).padStart(3, '0')}`;
+    transIdByKey.set(key, existing || gen);
   });
 
   const getStatusColor = (status: string) => {
@@ -971,11 +1096,11 @@ const isTaxableItem = (item: any): boolean => {
               <div className="flex space-x-3">
                 <div className="relative flex items-center">
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={16} />
-                  <Input placeholder="Search payments..." value={searchQuery} onChange={(e)=>setSearchQuery(e.target.value)} className="pl-10 w-64 bg-white" />
+                  <Input placeholder="Search payments..." value={searchQuery} onChange={(e)=>setSearchQuery(e.target.value)} className="pl-10 w-64 bg-white text-gray-900 placeholder:text-gray-500" />
                   <span className="ml-3 text-sm text-white/80 bg-black/10 px-2 py-1 rounded">{filterStatus === 'all' ? 'All' : filterStatus}</span>
                 </div>
                 <Select value={filterStatus} onValueChange={setFilterStatus}>
-                  <SelectTrigger className="w-40 bg-white"><SelectValue placeholder="Filter by status" /></SelectTrigger>
+                  <SelectTrigger className="w-40 bg-white text-gray-900"><SelectValue placeholder="Filter by status" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All Status</SelectItem>
                     <SelectItem value="completed">Completed</SelectItem>
@@ -1017,6 +1142,16 @@ const isTaxableItem = (item: any): boolean => {
                           <div><p className="text-gray-500">Method</p><p className="font-medium capitalize">{payment.method}</p></div>
                           <div><p className="text-gray-500">Date & Time</p><p className="font-medium">{new Date(payment.date).toLocaleDateString('en-PH')} {payment.time}</p></div>
                           <div><p className="text-gray-500">Reference</p><p className="font-medium">{payment.reference}</p></div>
+                          <div>
+                            <p className="text-gray-500">Transaction ID</p>
+                            <p className="font-medium">
+                              {(() => {
+                                const key = String(payment._id || payment.id || `${payment.invoiceNumber || ''}-${payment.date || ''}-${payment.amount || ''}`);
+                                const label = transIdByKey.get(key) || payment.transactionId || payment._id || 'N/A';
+                                return label;
+                              })()}
+                            </p>
+                          </div>
                         </div>
                       </div>
                       <div className="flex flex-col items-end space-y-2 ml-4">
@@ -1027,7 +1162,21 @@ const isTaxableItem = (item: any): boolean => {
                           </span>
                         </Badge>
                         <div className="flex space-x-2">
-                          <Button variant="outline" size="sm" onClick={() => { setProcessedPayment(payment); setShowReceiptDialog(true); }}>
+                          <Button variant="outline" size="sm" onClick={async () => { 
+                            setProcessedPayment(payment);
+                            // Fetch invoice to get items if not already in payment
+                            if ((!payment.items || payment.items.length === 0) && payment.invoiceNumber) {
+                              try {
+                                const inv = availableInvoices.find((i:any) => i.number === payment.invoiceNumber || i.invoiceNumber === payment.invoiceNumber);
+                                if (inv && Array.isArray(inv.items) && inv.items.length > 0) {
+                                  payment.items = inv.items;
+                                }
+                              } catch (e) {
+                                console.warn('Failed to fetch invoice items', e);
+                              }
+                            }
+                            setShowReceiptDialog(true);
+                          }}>
                             <Eye className="h-4 w-4" />
                           </Button>
                         </div>
@@ -1252,8 +1401,56 @@ const isTaxableItem = (item: any): boolean => {
               </div>
             )}
 
+            {selectedPaymentMethod === 'gcash' && (
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-3">
+                <h4 className="font-medium text-blue-900">GCash Payment Instructions</h4>
+                <div className="flex flex-col items-center justify-center space-y-3">
+                  <div className="bg-white p-3 rounded-lg border-2 border-blue-300 shadow-sm w-48">
+                    <img 
+                      src="/gcash-qr.svg" 
+                      alt="GCash QR Code" 
+                      className="w-full h-auto"
+                    />
+                  </div>
+                  <div className="text-center text-xs text-blue-900">
+                    <p className="font-medium mb-1">Scan with your GCash app</p>
+                    <p className="text-blue-700">Amount: <span className="font-bold">₱{Number(newPayment.amount || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</span></p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {selectedPaymentMethod === 'paymaya' && (
+              <div className="bg-green-50 border border-green-200 rounded-lg p-4 space-y-3">
+                <h4 className="font-medium text-green-900">PayMaya Payment Details</h4>
+                <div className="space-y-3">
+                  <div>
+                    <Label>Amount to Pay (₱)</Label>
+                    <Input type="number" value={newPayment.amount} disabled className="bg-white" />
+                  </div>
+                  <div className="bg-green-100 border border-green-300 rounded p-3 text-sm text-green-900">
+                    <p className="font-medium mb-1">Transaction Details:</p>
+                    <p>Please proceed with PayMaya app to complete the payment</p>
+                    <p className="mt-2 text-xs text-green-700">Reference: {newPayment.invoiceNumber || 'INV-' + Date.now()}</p>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div className="flex justify-end space-x-3">
-              <Button variant="outline" onClick={() => setShowProcessForm(false)}>Cancel</Button>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setShowProcessForm(false);
+                  setSelectedInvoiceNumber("");
+                  setSelectedPatientId("");
+                  setNewPayment(prev => ({ ...prev, patientId: "", patientName: "", invoiceNumber: "", amount: "" }));
+                  try { window.localStorage.removeItem('selectedInvoiceForProcessing'); } catch (e) {}
+                  try { window.localStorage.removeItem('selectedInvoiceForProcessingNumber'); } catch (e) {}
+                }}
+              >
+                Cancel
+              </Button>
               <Button onClick={handleConfirmPayment} disabled={isProcessing || !selectedPaymentMethod || !newPayment.amount} className="bg-[#358E83] hover:bg-[#358E83]/90 text-white">Confirm Payment</Button>
             </div>
           </CardContent>
@@ -1321,7 +1518,7 @@ const isTaxableItem = (item: any): boolean => {
         <DialogContent className="max-w-full w-[min(1100px,80vw)] max-h-[90vh] overflow-y-auto receipt-dialog p-6 mx-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center justify-between">
-              <span>Invoice Receipt</span>
+              <span>Payment Receipt</span>
               <Button
                 variant="outline"
                 size="sm"
@@ -1337,126 +1534,7 @@ const isTaxableItem = (item: any): boolean => {
 
           <div id="payment-receipt-print" className="space-y-6 print:p-8">
             {processedPayment ? (
-              <>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-b pb-4">
-                  <div>
-                    <h2 className="text-2xl font-bold text-[#358E83]">MediCare Hospital</h2>
-                    <p className="text-sm text-gray-600">123 Health Street, Medical District, Philippines</p>
-                    <p className="text-sm text-gray-600">Tel: (02) 1234-5678 | Email: billing@medicare.ph</p>
-                  </div>
-                  <div className="text-sm">
-                    <div className="mb-2">
-                      <p className="text-gray-600 text-xs">Invoice Number</p>
-                      <p className="font-semibold">{processedPayment.invoiceNumber}</p>
-                    </div>
-                    <div className="mb-2">
-                      <p className="text-gray-600 text-xs">Date Issued</p>
-                      <p className="font-semibold">{formatIssuedDate(processedPayment)}</p>
-                    </div>
-                    <div className="mb-2">
-                      <p className="text-gray-600 text-xs">Patient</p>
-                      <p className="font-semibold">{processedPayment.patientName}</p>
-                    </div>
-                    <div className="mb-2">
-                      <p className="text-gray-600 text-xs">Patient ID</p>
-                      <p className="font-semibold">{resolvePatientDisplay(patients, processedPayment?.patientId || processedPayment?.id || processedPayment?._id)}</p>
-                    </div>
-                    <div className="flex items-center justify-between text-sm">
-                      <div>
-                        <p className="text-gray-600 text-xs">Age / Sex</p>
-                        <p className="font-semibold">{getDemographicsForPayment(processedPayment).age} / {getDemographicsForPayment(processedPayment).sex}</p>
-                      </div>
-                      <div>
-                        <p className="text-gray-600 text-xs">Status</p>
-                        <Badge className={getStatusColor(processedPayment.status)}>{(processedPayment.status || 'paid').toUpperCase()}</Badge>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div>
-                  <h3 className="font-semibold mb-2">Services Rendered</h3>
-                  <div className="border rounded-lg overflow-hidden">
-                    <table className="w-full">
-                      <thead className="bg-gray-50">
-                        <tr>
-                          <th className="px-4 py-2 text-left">Description</th>
-                          <th className="px-4 py-2 text-center">Qty</th>
-                          <th className="px-4 py-2 text-right">Rate</th>
-                          <th className="px-4 py-2 text-right">Amount</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {Array.isArray(processedPayment.items) && processedPayment.items.length > 0 ? processedPayment.items.map((item:any, idx:number) => (
-                          <tr key={item.id || idx} className="border-t">
-                            <td className="px-4 py-2">
-                              <div>{item.description || item.name || item.medicationName || 'Item'}</div>
-                              <div className="text-xs text-gray-500">{item.category || item.group || ''}</div>
-                            </td>
-                            <td className="px-4 py-2 text-center">{item.quantity ?? item.qty ?? 1}</td>
-                            <td className="px-4 py-2 text-right">₱{Number(item.rate ?? item.unitPrice ?? item.price ?? item.totalPrice ?? 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</td>
-                            <td className="px-4 py-2 text-right">₱{Number(item.amount ?? item.totalPrice ?? (item.quantity ?? 1) * (item.rate ?? item.unitPrice ?? item.price ?? 0)).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</td>
-                          </tr>
-                        )) : (
-                          <tr>
-                            <td className="px-4 py-2">No items</td>
-                            <td className="px-4 py-2" />
-                            <td className="px-4 py-2" />
-                            <td className="px-4 py-2 text-right">₱0.00</td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-
-                <div className="border-t pt-4">
-                  <div className="flex justify-end">
-                    <div className="w-96 space-y-2">
-                      <div className="flex justify-between">
-                        <span>Subtotal:</span>
-                        <span>₱{Number(processedPayment.subtotal || processedPayment.amount || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</span>
-                      </div>
-                      {processedPayment.discount && Number(processedPayment.discount) > 0 && (
-                        <div className="flex justify-between text-green-600">
-                          <span>Discount:</span>
-                          <span>-₱{Number(processedPayment.discount).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</span>
-                        </div>
-                      )}
-                      {processedPayment.tax && Number(processedPayment.tax) > 0 && (
-                        <div className="flex justify-between text-blue-600 text-sm">
-                          <span>VAT on Medicines (12%):</span>
-                          <span>₱{Number(processedPayment.tax).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</span>
-                        </div>
-                      )}
-                      <div className="border-t my-2"></div>
-                      <div className="flex justify-between font-bold text-lg">
-                        <span>Total Amount Paid:</span>
-                        <span>₱{Number(processedPayment.amount || processedPayment.subtotal || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="border-t pt-4 space-y-3">
-                  <div className="grid grid-cols-2 gap-4 text-sm">
-                    <div>
-                      <p className="text-gray-600">Processed By:</p>
-                      <p className="font-semibold">{processedPayment.createdBy || userSession?.name || 'System'}</p>
-                    </div>
-                    <div>
-                      <p className="text-gray-600">Processed At:</p>
-                      <p className="font-semibold">{new Date(processedPayment.date || processedPayment.createdAt || Date.now()).toLocaleString('en-PH')}</p>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="text-center text-sm text-gray-600 border-t pt-4">
-                  <p>Thank you for choosing MediCare Hospital!</p>
-                  <p className="mt-2">For inquiries, please contact our billing department.</p>
-                  <p className="mt-4">Generated on {new Date().toLocaleString('en-PH', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
-                </div>
-              </>
+              <TransactionRecord payment={processedPayment} />
             ) : (
               <p>No receipt available.</p>
             )}

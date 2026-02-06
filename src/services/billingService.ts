@@ -43,151 +43,22 @@ class BillingService {
   private remoteSyncSuppressed: boolean = false;
 
   constructor() {
-    // Initialize with some sample data
-    this.records = [
-      {
-        id: "1",
-        type: "invoice",
-        number: "INV-2025-001",
-        patientName: "Maria Santos",
-        patientId: "P001",
-        date: "2025-01-05",
-        time: "10:30 AM",
-        amount: 13800,
-        status: "completed",
-        description: "General Consultation, Blood Test, X-Ray",
-        department: "Outpatient"
-      },
-      {
-        id: "2",
-        type: "payment",
-        number: "PAY-2025-001",
-        patientName: "Maria Santos",
-        patientId: "P001",
-        date: "2025-01-05",
-        time: "10:45 AM",
-        amount: 13800,
-        status: "completed",
-        description: "Payment for INV-2025-001",
-        paymentMethod: "GCash",
-        reference: "GCH-20250105-001"
-      },
-      {
-        id: "3",
-        type: "pharmacy",
-        number: "PH-2025-001",
-        patientName: "Juan Dela Cruz",
-        patientId: "P002",
-        date: "2025-01-04",
-        time: "2:15 PM",
-        amount: 2500,
-        status: "completed",
-        description: "Prescription Medications (Amoxicillin, Paracetamol)",
-        department: "Pharmacy",
-        items: [
-          {
-            id: "med1",
-            description: "Amoxicillin 500mg Capsules x30",
-            quantity: 30,
-            unitPrice: 25,
-            totalPrice: 750
-          },
-          {
-            id: "med2",
-            description: "Paracetamol 500mg Tablets x20",
-            quantity: 20,
-            unitPrice: 5,
-            totalPrice: 100
-          },
-          {
-            id: "med3",
-            description: "Cough Syrup 120ml",
-            quantity: 1,
-            unitPrice: 150,
-            totalPrice: 150
-          }
-        ]
-      },
-      {
-        id: "4",
-        type: "invoice",
-        number: "INV-2025-002",
-        patientName: "Juan Dela Cruz",
-        patientId: "P002",
-        date: "2025-01-05",
-        time: "11:15 AM",
-        amount: 7820,
-        status: "pending",
-        description: "Follow-up Consultation, Medication",
-        department: "Outpatient"
-      },
-      {
-        id: "5",
-        type: "invoice",
-        number: "INV-2025-003",
-        patientName: "Anna Reyes",
-        patientId: "P003",
-        date: "2025-01-04",
-        time: "9:30 AM",
-        amount: 11040,
-        status: "pending",
-        description: "Laboratory Tests, Consultation",
-        department: "Laboratory"
-      },
-      {
-        id: "6",
-        type: "invoice",
-        number: "INV-2025-004",
-        patientName: "Roberto Cruz",
-        patientId: "P004",
-        date: "2025-01-04",
-        time: "3:45 PM",
-        amount: 28000,
-        status: "pending",
-        description: "X-Ray, Physical Therapy Sessions",
-        department: "Radiology"
-      },
-      {
-        id: "7",
-        type: "service",
-        number: "SRV-2025-001",
-        patientName: "Carmen Flores",
-        patientId: "P005",
-        date: "2025-01-03",
-        time: "1:00 PM",
-        amount: 15600,
-        status: "pending",
-        description: "CT Scan, Blood Chemistry Panel",
-        department: "Radiology"
-      },
-      {
-        id: "8",
-        type: "invoice",
-        number: "INV-2025-005",
-        patientName: "Carlos Miguel",
-        patientId: "P004",
-        date: "2025-01-03",
-        time: "8:30 AM",
-        amount: 45000,
-        status: "completed",
-        description: "Minor Surgery, Anesthesia, Recovery Room",
-        department: "Surgery"
-      },
-      {
-        id: "9",
-        type: "payment",
-        number: "PAY-2025-002",
-        patientName: "Carlos Miguel",
-        patientId: "P004",
-        date: "2025-01-03",
-        time: "4:15 PM",
-        amount: 45000,
-        status: "completed",
-        description: "Payment for INV-2025-005",
-        paymentMethod: "Credit Card",
-        reference: "CC-20250103-001"
-      }
-    ];
+    // Start with no local demo records so local billing history is empty by default
+    this.records = [];
+    // By default do NOT suppress remote sync — allow fresh sessions to auto-fetch
+    this.remoteSyncSuppressed = false;
+    // Do not set the cleared flag on initialization — leave that to explicit user actions
+    try { /* intentionally no-op: do not modify localStorage here */ } catch (e) { /* ignore when not available */ }
+    // Start periodic automations (client-side): run every 5 minutes
+    try {
+      setInterval(() => {
+        try {
+          this.runAutomations();
+        } catch (e) {
+          console.warn('billingService: automation run failed', e);
+        }
+      }, 5 * 60 * 1000);
+    } catch (e) { /* ignore timers in constrained environments */ }
   }
 
   // Subscribe to billing record changes
@@ -246,8 +117,9 @@ class BillingService {
     date: string;
     time?: string;
     status: 'completed' | 'pending' | 'processing' | 'failed';
+    transactionId?: string;
   }) {
-    const paymentNumber = `PAY-${Date.now()}`;
+    const paymentNumber = payment.transactionId || payment.reference || `PAY-${Date.now()}`;
     
     const record: BillingRecord = {
       id: Date.now().toString(),
@@ -267,7 +139,79 @@ class BillingService {
     };
 
     this.addRecord(record);
+    // Attempt to mark matching invoice(s) as completed when a payment arrives
+    try {
+      if (payment.invoiceNumber) {
+        const invoice = this.records.find(r => r.type === 'invoice' && (String(r.number) === String(payment.invoiceNumber) || (r.number || '').includes(String(payment.invoiceNumber))));
+        if (invoice && invoice.status !== 'completed') {
+          invoice.status = 'completed';
+        }
+      } else {
+        // fallback: try to match by patientId and amount
+        const invoice = this.records.find(r => r.type === 'invoice' && r.patientId === payment.patientId && Math.abs((r.amount || 0) - (payment.amount || 0)) < 0.01 && r.status === 'pending');
+        if (invoice) invoice.status = 'completed';
+      }
+    } catch (e) {
+      console.warn('billingService: auto-complete invoice on payment failed', e);
+    }
+
+    this.notifyListeners();
     return record;
+  }
+
+  // Run simple automations:
+  // - Auto-complete invoices when matching payments exist
+  // - Auto-void (cancel) pending invoices older than `autoVoidDays`
+  private autoVoidDays: number = 30;
+
+  setAutoVoidDays(days: number) {
+    this.autoVoidDays = Number(days) || 0;
+  }
+
+  runAutomations() {
+    const now = Date.now();
+
+    // Auto-complete invoices using payments present in records
+    try {
+      const payments = this.records.filter(r => r.type === 'payment');
+      const invoices = this.records.filter(r => r.type === 'invoice');
+      payments.forEach(p => {
+        invoices.forEach(inv => {
+          if (inv.status !== 'completed') {
+            // match by invoice number or by patient+amount
+            if ((p.number && inv.number && String(p.number) === String(inv.number)) ||
+                (p.description && inv.number && String(p.description).includes(String(inv.number))) ||
+                (p.patientId && inv.patientId && String(p.patientId) === String(inv.patientId) && Math.abs((p.amount||0) - (inv.amount||0)) < 0.01)) {
+              inv.status = 'completed';
+            }
+          }
+        });
+      });
+    } catch (e) {
+      console.warn('billingService: auto-complete failed', e);
+    }
+
+    // Auto-void old pending invoices
+    try {
+      if (this.autoVoidDays > 0) {
+        const cutoff = now - (this.autoVoidDays * 24 * 60 * 60 * 1000);
+        let changed = false;
+        this.records.forEach(r => {
+          if ((r.status === 'pending') && r.date) {
+            const dt = new Date(r.date).getTime();
+            if (!isNaN(dt) && dt < cutoff) {
+              r.status = 'cancelled';
+              changed = true;
+            }
+          }
+        });
+        if (changed) this.notifyListeners();
+      }
+    } catch (e) {
+      console.warn('billingService: auto-void failed', e);
+    }
+    // Notify after automations in case anything changed
+    this.notifyListeners();
   }
 
   // Add invoice record

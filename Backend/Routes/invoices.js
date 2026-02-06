@@ -22,6 +22,7 @@ router.post("/", async (req, res) => {
     const invoice = new Billing({
       invoiceNumber: data.number || data.invoiceNumber,
       patientId: data.patientId,
+      patientNumber: data.patientNumber || data.patientId,
       patientName: data.patientName,
       items: data.items || [],
       subtotal: data.subtotal || 0,
@@ -48,6 +49,24 @@ router.post("/", async (req, res) => {
 
 // ✏️ UPDATE invoice (used for marking paid, updating totals, etc.)
 router.patch("/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updates = req.body;
+
+    const updatedInvoice = await Billing.findByIdAndUpdate(id, updates, { new: true });
+
+    if (!updatedInvoice)
+      return res.status(404).json({ success: false, message: "Invoice not found" });
+
+    res.json({ success: true, message: "Invoice updated successfully", data: updatedInvoice });
+  } catch (err) {
+    console.error("Error updating invoice:", err);
+    res.status(500).json({ success: false, message: "Error updating invoice", error: err });
+  }
+});
+
+// ✏️ UPDATE invoice with PUT (alternative endpoint for payment processing)
+router.put("/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const updates = req.body;

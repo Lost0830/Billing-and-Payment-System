@@ -8,6 +8,19 @@ export class ConfigManager {
   constructor() {
     // Load configuration from localStorage if available
     this.loadFromStorage();
+
+    // Ensure default integration endpoints use backend proxy when not explicitly configured
+    // This lets front-end "Test Connection" use /api/emr and /api/pharmacy by default.
+    try {
+      if (!this.config.emr?.baseUrl || this.config.emr.baseUrl.trim() === '') {
+        this.config.emr.baseUrl = '/api/emr';
+      }
+      if (!this.config.pharmacy?.baseUrl || this.config.pharmacy.baseUrl.trim() === '') {
+        this.config.pharmacy.baseUrl = '/api/pharmacy';
+      }
+    } catch (e) {
+      // ignore and keep existing defaults
+    }
   }
 
   // Get current configuration
@@ -54,8 +67,11 @@ export class ConfigManager {
       errors.push('EMR Base URL is not valid');
     }
 
-    if (!this.config.emr.apiKey || this.config.emr.apiKey === 'YOUR_EMR_API_KEY_HERE') {
-      errors.push('EMR API Key is required');
+    // When using backend proxy endpoints (baseUrl starts with /api), API key is managed server-side
+    if (!this.config.emr.baseUrl.startsWith('/api')) {
+      if (!this.config.emr.apiKey || this.config.emr.apiKey === 'YOUR_EMR_API_KEY_HERE') {
+        errors.push('EMR API Key is required');
+      }
     }
 
     // Pharmacy validation
@@ -65,8 +81,10 @@ export class ConfigManager {
       errors.push('Pharmacy Base URL is not valid');
     }
 
-    if (!this.config.pharmacy.apiKey || this.config.pharmacy.apiKey === 'YOUR_PHARMACY_API_KEY_HERE') {
-      errors.push('Pharmacy API Key is required');
+    if (!this.config.pharmacy.baseUrl.startsWith('/api')) {
+      if (!this.config.pharmacy.apiKey || this.config.pharmacy.apiKey === 'YOUR_PHARMACY_API_KEY_HERE') {
+        errors.push('Pharmacy API Key is required');
+      }
     }
 
     // Billing validation
@@ -90,17 +108,28 @@ export class ConfigManager {
       pharmacy: { success: false, error: undefined as string | undefined }
     };
 
+    // Helper: fetch with timeout using AbortController (compatible fallback)
+    const fetchWithTimeout = async (url: string, options: RequestInit = {}, timeoutMs: number = 10000) => {
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const res = await fetch(url, { ...options, signal: controller.signal });
+        return res;
+      } finally {
+        clearTimeout(id);
+      }
+    };
+
     // Test EMR connection
     try {
-      const emrUrl = `${this.config.emr.baseUrl}/health`;
-      const emrResponse = await fetch(emrUrl, {
+      const emrUrl = `${this.config.emr.baseUrl.replace(/\/$/, '')}/health`;
+      const emrResponse = await fetchWithTimeout(emrUrl, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${this.config.emr.apiKey}`,
           'Content-Type': 'application/json'
-        },
-        signal: AbortSignal.timeout(this.config.emr.timeout)
-      });
+        }
+      }, this.config.emr.timeout);
       
       results.emr.success = emrResponse.ok;
       if (!emrResponse.ok) {
@@ -112,15 +141,14 @@ export class ConfigManager {
 
     // Test Pharmacy connection
     try {
-      const pharmacyUrl = `${this.config.pharmacy.baseUrl}/health`;
-      const pharmacyResponse = await fetch(pharmacyUrl, {
+      const pharmacyUrl = `${this.config.pharmacy.baseUrl.replace(/\/$/, '')}/health`;
+      const pharmacyResponse = await fetchWithTimeout(pharmacyUrl, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${this.config.pharmacy.apiKey}`,
           'Content-Type': 'application/json'
-        },
-        signal: AbortSignal.timeout(this.config.pharmacy.timeout)
-      });
+        }
+      }, this.config.pharmacy.timeout);
       
       results.pharmacy.success = pharmacyResponse.ok;
       if (!pharmacyResponse.ok) {
@@ -205,7 +233,11 @@ export class ConfigManager {
   }
 
   private isValidUrl(url: string): boolean {
+    if (!url) return false;
+    // Accept relative proxy paths (e.g. /api/...) and absolute URLs
+    if (url.startsWith('/')) return true;
     try {
+      // Try parsing absolute URL
       new URL(url);
       return true;
     } catch {

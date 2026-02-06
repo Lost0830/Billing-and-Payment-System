@@ -101,7 +101,17 @@ export default function App() {
   return (
     <>
       {renderCurrentView()}
-      <Toaster />
+      <Toaster
+        position="bottom-right"
+        closeButton
+        richColors
+        visibleToasts={1}
+        duration={3500}
+        gap={8}
+        offset={24}
+        toastOptions={{ classNames: { toast: "max-w-[480px] p-4", title: "text-base", description: "text-sm" } }}
+        style={{ maxHeight: '40vh', overflow: 'hidden' }}
+      />
     </>
   );
 }

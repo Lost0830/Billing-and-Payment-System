@@ -99,14 +99,19 @@ export function Settings({ onNavigateToView }: SettingsProps) {
     try {
       // Save current config before testing
       if (system === 'emr') {
+        // Force use of backend proxy for reliable testing
+        const baseUrl = '/api/emr';
+        setEmrConfig(prev => ({ ...prev, baseUrl }));
         configManager.updateEMRConfig({
-          baseUrl: emrConfig.baseUrl,
+          baseUrl,
           apiKey: emrConfig.apiKey,
           syncInterval: emrConfig.syncInterval
         });
       } else {
+        const baseUrl = '/api/pharmacy';
+        setPharmacyConfig(prev => ({ ...prev, baseUrl }));
         configManager.updatePharmacyConfig({
-          baseUrl: pharmacyConfig.baseUrl,
+          baseUrl,
           apiKey: pharmacyConfig.apiKey,
           syncInterval: pharmacyConfig.syncInterval
         });

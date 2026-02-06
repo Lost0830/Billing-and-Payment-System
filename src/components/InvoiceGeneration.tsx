@@ -23,6 +23,7 @@ import { getDisplayPatientId, getInternalPatientKey, normalizePatients, resolveP
 import { pharmacyService } from "../services/pharmacyIntegration";
 import { DiscountService, DiscountOption } from "../services/discountService";
 import { patientService } from "../services/patientService";
+import { TransactionRecord } from "./TransactionRecord";
 
 interface InvoiceGenerationProps {
   onNavigateToView: (view: string) => void;
@@ -62,6 +63,7 @@ interface Invoice {
   accountId?: string;
   invoiceNumber?: string;
   patient?: any;
+  createdAt?: string; // Date when invoice was created
 }
 
 const HOSPITAL_SERVICES = {
@@ -103,7 +105,7 @@ const PREDEFINED_PATIENTS = [
   { id: "P015", name: "Valentina Castro", fullDisplay: "Valentina Castro (P015)" }
 ];
 
-const API_BASE = "http://localhost:5000/api";
+const API_BASE = "http://localhost:5002/api";
 
 export function InvoiceGeneration({ onNavigateToView }: InvoiceGenerationProps) {
   // Local component state (was accidentally removed in a previous edit)
@@ -126,6 +128,7 @@ export function InvoiceGeneration({ onNavigateToView }: InvoiceGenerationProps) 
   const [invoiceToDelete, setInvoiceToDelete] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTab, setActiveTab] = useState<'active' | 'archived'>('active');
+  const [autoAppliedDiscount, setAutoAppliedDiscount] = useState<string>("");
 
   // Fetch helper inside component so it can call setInvoices
   const fetchInvoices = async () => {
@@ -188,6 +191,7 @@ export function InvoiceGeneration({ onNavigateToView }: InvoiceGenerationProps) 
           generatedAt: inv.generatedAt || inv.date || new Date().toISOString(),
           notes: inv.notes || "",
           isArchived: !!inv.isArchived,
+          createdAt: inv.createdAt || inv.generatedAt || new Date().toISOString(),
         } as Invoice;
       });
 
@@ -232,6 +236,47 @@ export function InvoiceGeneration({ onNavigateToView }: InvoiceGenerationProps) 
   });
   
   const [selectedPatientId, setSelectedPatientId] = useState("");
+
+  // Helper function to check if patient is senior citizen (60+)
+  const getPatientAge = (patient: any): number | null => {
+    if (!patient) return null;
+    
+    const dob = patient.dateOfBirth || patient.dob || patient.birthDate;
+    if (!dob) return null;
+    
+    try {
+      const age = patientService.calculateAge(dob);
+      return typeof age === 'number' ? age : null;
+    } catch (e) {
+      console.warn('Failed to calculate age', e);
+      return null;
+    }
+  };
+
+  // Helper to auto-apply senior citizen discount
+  const checkAndApplySeniorDiscount = (patient: any) => {
+    const age = getPatientAge(patient);
+    
+    if (age !== null && age >= 60) {
+      // Find senior citizen discount option
+      const seniorDiscount = dynamicDiscounts.find(d => 
+        (d.name || '').toLowerCase().includes('senior')
+      ) || DISCOUNT_OPTIONS.find(d => d.value === 'senior');
+      
+      if (seniorDiscount) {
+        const discountId = (seniorDiscount as any).id || 'senior';
+        setSelectedDiscount(discountId);
+        setAutoAppliedDiscount(`Senior Citizen (Age: ${age})`);
+        toast.success(`Senior citizen discount applied (Age: ${age})`);
+        return true;
+      }
+    } else if (age !== null) {
+      // Patient is not senior, clear any auto-applied discount
+      setAutoAppliedDiscount("");
+    }
+    
+    return false;
+  };
 
   // Listen for EMR items requested to be added to invoice (from admin or cashier)
   useEffect(() => {
@@ -453,6 +498,7 @@ const handleGenerateInvoice = async () => {
       generatedBy: "Billing Department",
       generatedAt: new Date().toISOString(),
       notes: newInvoice.notes,
+      createdAt: new Date().toISOString(),
     };
 
     const res: any = await axios.post(`${API_BASE}/invoices`, invoice);
@@ -850,6 +896,8 @@ const confirmDeleteInvoice = async () => {
                                                   const hasEmrData = MockEmrService.hasUnbilledServices(internalKey);
                                                   const emrData = MockEmrService.getPatientEmrData(internalKey);
                                                   const display = `${patient.name} (${displayPid})`;
+                                                  const patientAge = getPatientAge(patient);
+                                                  const isSenior = patientAge !== null && patientAge >= 60;
                                   return (
                                     <CommandItem
                                                       key={display}
@@ -923,6 +971,9 @@ const confirmDeleteInvoice = async () => {
                                       console.error('Failed to fetch pharmacy transactions', err);
                                     }
 
+                                    // Auto-apply senior citizen discount if applicable
+                                    checkAndApplySeniorDiscount(patient);
+
                                     setOpenPatientCombobox(false);
                                     setPatientSearch("");
                                   }}
@@ -933,7 +984,14 @@ const confirmDeleteInvoice = async () => {
                                     }`}
                                   />
                                   <div className="flex-1">
-                                    <div>{display}</div>
+                                    <div className="flex items-center gap-2">
+                                      <span>{display}</span>
+                                      {isSenior && (
+                                        <Badge className="bg-yellow-100 text-yellow-800 text-xs">
+                                          Senior (Age {patientAge})
+                                        </Badge>
+                                      )}
+                                    </div>
                                     {hasEmrData && emrData && (
                                       <div className="text-xs text-green-600 flex items-center mt-1">
                                         <span className="inline-block w-2 h-2 bg-green-500 rounded-full mr-1"></span>
@@ -983,6 +1041,23 @@ const confirmDeleteInvoice = async () => {
                       </Badge>
                     </div>
                   </div>
+
+                  {/* Auto-Applied Discount Display */}
+                  {autoAppliedDiscount && (
+                    <div className="mt-3 p-3 bg-yellow-50 border border-yellow-300 rounded-lg">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h4 className="font-medium text-yellow-900">✓ Discount Applied</h4>
+                          <p className="text-sm text-yellow-700">
+                            {autoAppliedDiscount}
+                          </p>
+                        </div>
+                        <Badge className="bg-yellow-100 text-yellow-800">
+                          ACTIVE
+                        </Badge>
+                      </div>
+                    </div>
+                  )}
                   
                   {/* Pharmacy Integration Panel - sized like the patient dropdown */}
                   <div className="mt-3 flex justify-center">
@@ -1358,165 +1433,45 @@ const confirmDeleteInvoice = async () => {
           </DialogHeader>
 
           {generatedInvoice && (
-            <div className="flex flex-col">
-              <div id="invoice-receipt-print" className="space-y-2 print:p-1 text-sm overflow-y-auto max-h-[60vh]">
-              {/* Two-column header: hospital details (left) and invoice/patient metadata (right) */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-b pb-3">
-                <div>
-                  <h2 className="text-2xl font-bold text-[#358E83]">MediCare Hospital</h2>
-                  <p className="text-xs text-gray-600">123 Health Street, Medical District</p>
-                  <p className="text-xs text-gray-600">Tel: (02) 1234-5678</p>
-                </div>
-                <div className="text-sm">
-                  <div className="mb-2">
-                    <p className="text-xs text-gray-600">Invoice Number:</p>
-                    <p className="font-semibold text-sm">{generatedInvoice.number}</p>
-                  </div>
-                  <div className="mb-2">
-                    <p className="text-xs text-gray-600">Date Issued:</p>
-                    <p className="font-semibold text-sm">{formatDate(generatedInvoice.date)}</p>
-                  </div>
-                  <div className="mb-2">
-                    <p className="text-xs text-gray-600">Patient Name:</p>
-                    <p className="font-semibold text-sm">{generatedInvoice.patientName}</p>
-                  </div>
-                  <div className="mb-2">
-                    <p className="text-xs text-gray-600">Patient ID:</p>
-                    <p className="font-semibold text-sm">{resolvePatientDisplay(patients, generatedInvoice.patientId || generatedInvoice.id || generatedInvoice._id)}</p>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-xs text-gray-600">Payment Terms:</p>
-                      <p className="font-semibold text-sm">{formatDate(generatedInvoice.dueDate)}{generatedInvoice.dueDate === generatedInvoice.date && (<span className="text-xs text-orange-600 ml-2">(Due Immediately)</span>)}</p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-xs text-gray-600">Status:</p>
-                      <Badge className={getStatusColor(generatedInvoice.status)}>
-                        <span className="text-[11px]">{generatedInvoice.status.toUpperCase()}</span>
-                      </Badge>
-                    </div>
-                  </div>
-                </div>
-              </div>
+            <div id="invoice-receipt-print" className="overflow-y-auto max-h-[75vh]">
+              <TransactionRecord
+                transactionNumber={generatedInvoice.number || `INV-${generatedInvoice.id}`}
+                transactionType="Invoice"
+                transactionDate={generatedInvoice.date}
+                status={(generatedInvoice.status as any) || 'Pending'}
+                patientName={generatedInvoice.patientName}
+                patientId={resolvePatientDisplay(patients, generatedInvoice.patientId || generatedInvoice.id)}
+                companyName="MEDICARE HOSPITAL"
+                companyAddress="123 Health Street, Medical District, Philippines"
+                items={generatedInvoice.items || []}
+                subtotal={generatedInvoice.subtotal || 0}
+                discount={generatedInvoice.discount || 0}
+                discountPercentage={generatedInvoice.discountPercentage}
+                tax={generatedInvoice.tax || 0}
+                total={generatedInvoice.total}
+                invoiceNumber={generatedInvoice.number || `INV-${generatedInvoice.id}`}
+              />
+            </div>
+          )}
 
-              {/* Services Table */}
-              <div>
-                <h3 className="font-semibold mb-1">Services Rendered</h3>
-                <div className="max-h-[160px] overflow-y-auto border rounded">
-                  <table className="w-full">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        <th className="px-2 py-2 text-left text-[12px]">Description</th>
-                        <th className="px-2 py-2 text-center text-[12px]">Qty</th>
-                        <th className="px-2 py-2 text-right text-[12px]">Rate</th>
-                        <th className="px-2 py-2 text-right text-[12px]">Amount</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {generatedInvoice?.items?.map((item) => (
-                        <tr key={item.id} className="border-t">
-                          <td className="px-2 py-2 align-top">
-                            <div className="text-xs">{item.description}</div>
-                            <div className="text-[11px] text-gray-500">{item.category}</div>
-                          </td>
-                          <td className="px-2 py-2 text-center align-top">{item.quantity}</td>
-                          <td className="px-2 py-2 text-right align-top">₱{item.rate.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                          <td className="px-2 py-2 text-right align-top">₱{item.amount.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+          {/* Action buttons (non-sticky) */}
+          <div className="mt-4 pt-2 border-t print:hidden">
+            <div className="flex justify-end space-x-2">
+              <Button variant="outline" size="sm" onClick={() => setShowReceiptDialog(false)}>
+                Close
+              </Button>
 
-              {/* Totals Section - Enhanced */}
-              <div className="border-t pt-3">
-                <div className="flex justify-end">
-                  <div className="w-48 space-y-1 text-sm">
-                    <div className="flex justify-between">
-                      <span>Subtotal:</span>
-                      <span>₱{(generatedInvoice.subtotal || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                    </div>
-
-                    {generatedInvoice.discount && generatedInvoice.discount > 0 && (
-                      <div className="flex justify-between text-green-600">
-                        <span>
-                          Discount - {generatedInvoice.discountType}
-                          {generatedInvoice.discountPercentage && generatedInvoice.discountPercentage > 0 && (
-                            <span className="text-xs ml-1">({generatedInvoice.discountPercentage}%)</span>
-                          )}:
-                        </span>
-                        <span>-₱{generatedInvoice.discount.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                      </div>
-                    )}
-
-                    {generatedInvoice.tax && generatedInvoice.tax > 0 && (
-                      <div className="flex justify-between text-blue-600 text-sm">
-                        <span>
-                          VAT on Medicines (12%):
-                          <span className="text-xs ml-1">(₱{(generatedInvoice.taxableAmount || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })})</span>
-                        </span>
-                        <span>₱{generatedInvoice.tax.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                      </div>
-                    )}
-                    
-                    <div className="border-t my-1"></div>
-                    
-                    <div className="flex justify-between font-semibold text-sm">
-                      <span>Total:</span>
-                      <span>₱{generatedInvoice.total.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              
-              {/* Transaction Information */}
-              {(generatedInvoice.notes || generatedInvoice.generatedBy) && (
-                <div className="border-t pt-3 space-y-2">
-                  {generatedInvoice.notes && (
-                    <div>
-                      <p className="text-sm text-gray-600 font-semibold">Notes:</p>
-                      <p className="text-sm">{generatedInvoice.notes}</p>
-                    </div>
-                  )}
-                  
-                  <div className="flex justify-between text-sm">
-                    <div>
-                      <p className="text-gray-600">Generated By:</p>
-                      <p className="font-semibold text-sm">{generatedInvoice.generatedBy}</p>
-                    </div>
-                    <div>
-                      <p className="text-gray-600">Generated At:</p>
-                      <p className="font-semibold text-sm">{formatDateTime(generatedInvoice.generatedAt)}</p>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Footer */}
-              <div className="text-center text-xs text-gray-600 border-t pt-1">
-                <p>Thank you for choosing MediCare Hospital</p>
-              </div>
-              </div>
-
-              {/* Action buttons (non-sticky) */}
-              <div className="mt-4 pt-2 border-t print:hidden">
-                <div className="flex justify-end space-x-2">
-                  <Button variant="outline" size="sm" onClick={() => setShowReceiptDialog(false)}>
-                    Close
-                  </Button>
-
-                  <Button
-                    size="sm"
-                    className="bg-[#358E83] hover:bg-[#358E83]/90 text-white"
-                    onClick={() => {
-                      try {
-                        const selId = (generatedInvoice && (generatedInvoice.id || generatedInvoice._id)) || '';
-                        const selNumber = (generatedInvoice && (generatedInvoice.number || generatedInvoice.invoiceNumber)) || '';
-                        if (selId) window.localStorage.setItem('selectedInvoiceForProcessing', String(selId));
+              <Button
+                size="sm"
+                className="bg-[#358E83] hover:bg-[#358E83]/90 text-white"
+                onClick={() => {
+                  try {
+                    const selId = (generatedInvoice && (generatedInvoice.id || generatedInvoice._id)) || '';
+                    const selNumber = (generatedInvoice && (generatedInvoice.number || generatedInvoice.invoiceNumber)) || '';
+                    if (selId) window.localStorage.setItem('selectedInvoiceForProcessing', String(selId));
                         if (selNumber) window.localStorage.setItem('selectedInvoiceForProcessingNumber', String(selNumber));
                         // dispatch an event as a fallback for consumers that listen for navigation
-                        try { window.dispatchEvent(new CustomEvent('navigate-to', { detail: { view: 'payment', invoiceId: selId, invoiceNumber: selNumber } })); } catch (e) {}
+                        try { window.dispatchEvent(new CustomEvent('navigate-to', { detail: { view: 'payment', invoiceId: selId, invoiceNumber: selNumber } })); } catch (e) { /* ignore */ }
                       } catch (e) { /* ignore */ }
                       // primary navigation callback
                       if (onNavigateToView) onNavigateToView('payment');
@@ -1698,7 +1653,7 @@ const confirmDeleteInvoice = async () => {
                       if (selNumber) window.localStorage.setItem('selectedInvoiceForProcessingNumber', String(selNumber));
                       try { window.dispatchEvent(new CustomEvent('navigate-to', { detail: { view: 'payment', invoiceId: selId, invoiceNumber: selNumber } })); } catch (e) {}
                     } catch (e) { /* ignore */ }
-                    if (onNavigateToView) onNavigateToView('payment');
+                    if ( onNavigateToView) onNavigateToView('payment');
                     else {
                       try { window.history.pushState({}, '', '/payment'); window.dispatchEvent(new PopStateEvent('popstate')); } catch (e) {}
                     }
@@ -1734,12 +1689,20 @@ const confirmDeleteInvoice = async () => {
                   <p className="font-semibold">{resolvePatientDisplay(patients, selectedInvoice.patientId || selectedInvoice.accountId || selectedInvoice.patient)}</p>
                 </div>
                 <div>
-                  <p className="text-sm text-gray-600">Date</p>
+                  <p className="text-sm text-gray-600">Invoice Date</p>
                   <p>{formatDate(selectedInvoice.date)}</p>
                 </div>
                 <div>
                   <p className="text-sm text-gray-600">Due Date</p>
                   <p>{formatDate(selectedInvoice.dueDate)}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-600">Created On</p>
+                  <p>{formatDateTime(selectedInvoice.createdAt)}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-600">Status</p>
+                  <p className="font-semibold capitalize">{selectedInvoice.status}</p>
                 </div>
               </div>
 
@@ -1789,7 +1752,7 @@ const confirmDeleteInvoice = async () => {
                   </div>
                 )}
                 <Separator />
-                <div className="flex justify-between font-semibold">
+                <div className="flex justify-between font-semibold text-sm">
                   <span>Total:</span>
                   <span>₱{selectedInvoice.total.toLocaleString()}</span>
                 </div>

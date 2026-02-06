@@ -9,7 +9,7 @@ export function LandingPage({ onNavigateToLogin }: LandingPageProps) {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50">
       {/* Navigation */}
-      <nav className="bg-white/80 backdrop-blur-sm border-b border-gray-200/50 sticky top-0 z-50">
+      <nav className="bg-white/80 backdrop-blur-sm border-b border-gray-200/50">
         <div className="max-w-7xl mx-auto px-6 lg:px-8">
           <div className="flex items-center justify-between h-20">
             <div className="flex items-center space-x-3">
@@ -72,26 +72,23 @@ export function LandingPage({ onNavigateToLogin }: LandingPageProps) {
             </div>
           </div>
 
-          {/* Electronic Medical Records - Featured */}
-          <div className="group bg-white rounded-2xl shadow-sm border-2 border-[#358E83] p-8 hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1 relative overflow-hidden">
-            <div className="absolute top-0 right-0 bg-[#358E83] text-white px-3 py-1 text-sm font-medium rounded-bl-xl">
-              Featured
-            </div>
+          {/* Electronic Medical Records */}
+          <div className="group bg-white rounded-2xl shadow-sm border border-gray-200/60 p-8 hover:shadow-xl hover:border-[#358E83]/20 transition-all duration-300 transform hover:-translate-y-1">
             <div className="flex flex-col items-center text-center">
               <div className="p-4 bg-[#358E83]/10 rounded-xl mb-6 group-hover:bg-[#358E83]/20 transition-colors">
                 <Heart className="text-[#358E83]" size={32} />
               </div>
               <h3 className="text-2xl font-bold text-gray-900 mb-4">
-                Electronic Medical Records
+                Appointment and Patient Records
               </h3>
               <p className="text-gray-600 mb-8 leading-relaxed">
                 Secure patient data management, medical history tracking, clinical documentation, and healthcare information systems.
               </p>
               <Button 
-                onClick={() => onNavigateToLogin('emr')}
+                onClick={() => onNavigateToLogin('apr')}
                 className="w-full bg-[#358E83] hover:bg-[#358E83]/90 text-white font-semibold py-3 rounded-xl transition-all duration-200 shadow-md hover:shadow-lg"
               >
-                Access EMR
+                Access Patient Records
               </Button>
             </div>
           </div>

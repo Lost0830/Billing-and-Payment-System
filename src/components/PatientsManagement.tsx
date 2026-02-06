@@ -38,7 +38,7 @@ import { toast } from "sonner";
 const ps: any = (patientService as any)?.default || (patientService as any) || {};
 
 // Use Vite-style env in the browser; fallback to localhost
-const API_URL = (import.meta as any)?.env?.VITE_API_URL || "http://localhost:5000/api";
+const API_URL = (import.meta as any)?.env?.VITE_API_URL || "http://localhost:5002/api";
 
 interface PatientsManagementProps {
   onNavigateToView?: (view: string) => void;
@@ -60,6 +60,8 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
   const [showAddMedicineDialog, setShowAddMedicineDialog] = useState(false);
   const [activeTab, setActiveTab] = useState("all");
   const [editingPatientId, setEditingPatientId] = useState<string | null>(null);
+  const [patientEmrData, setPatientEmrData] = useState<Map<string, any>>(new Map());
+  const [patientPharmacyData, setPatientPharmacyData] = useState<Map<string, any[]>>(new Map());
   // Helpers moved to src/utils/patientId.ts
 
   // Form states
@@ -92,13 +94,102 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
     date: new Date().toISOString().split('T')[0]
   });
 
-  // Fetch patients from backend via shared API helper
+  // Fetch patients from backend - ONLY from archiveappointments collection in mediSysDB
   const fetchPatientsFromDb = async () => {
     try {
-      const data = await fetchPatients();
-  // normalize to prefer human-friendly patientId for display
-  const normalized = normalizePatients(data || []);
-      setPatients(normalized);
+      let emrData: any[] = [];
+      try {
+        // Get patients from archiveappointments collection only
+        const r1 = await fetch(`${API_URL}/emr/patients-db`);
+        const b1 = await r1.json();
+        emrData = Array.isArray(b1) ? b1 : (b1?.data || []);
+      } catch (err) {
+        console.warn('Failed to fetch patients from archiveappointments:', err);
+      }
+      
+      // Only use patients from archiveappointments
+      const allPatients = normalizePatients(emrData || []);
+      
+      // Group patients by name, contact number, or ID
+      const patientMap = new Map();
+      
+      allPatients.forEach((patient: any) => {
+        // Normalize patient data - handle both formats (name/contactNumber vs firstname/lastname/phone)
+        const patientName = patient.name || `${patient.firstname || ''} ${patient.lastname || ''}`.trim() || '';
+        const patientContact = patient.contactNumber || patient.phone || '';
+        const patientId = getDisplayPatientId(patient) || getInternalPatientKey(patient) || patient.patientId || '';
+        
+        // Create keys for matching
+        const nameKey = patientName.toLowerCase().trim();
+        const contactKey = patientContact.replace(/\s+/g, '').toLowerCase();
+        const idKey = patientId.toString();
+        
+        // Try to find existing patient by name, contact, or ID
+        let existingKey = null;
+        for (const [key, existingPatient] of patientMap.entries()) {
+          const existingName = (existingPatient.name || `${existingPatient.firstname || ''} ${existingPatient.lastname || ''}`.trim() || '').toLowerCase().trim();
+          const existingContact = (existingPatient.contactNumber || existingPatient.phone || '').replace(/\s+/g, '').toLowerCase();
+          const existingId = (getDisplayPatientId(existingPatient) || getInternalPatientKey(existingPatient) || existingPatient.patientId || '').toString();
+          
+          // Match by name (if both have names and they match)
+          if (nameKey && existingName && nameKey === existingName) {
+            existingKey = key;
+            break;
+          }
+          // Match by contact number (if both have contacts and they match)
+          if (contactKey && existingContact && contactKey === existingContact) {
+            existingKey = key;
+            break;
+          }
+          // Match by ID (if both have IDs and they match)
+          if (idKey && existingId && idKey === existingId) {
+            existingKey = key;
+            break;
+          }
+        }
+        
+        if (existingKey) {
+          // Merge with existing patient
+          const existing = patientMap.get(existingKey);
+          // Merge services
+          const existingServices = existing.services || [];
+          const newServices = patient.services || [];
+          existing.services = [...existingServices, ...newServices.filter((s: any) => 
+            !existingServices.some((es: any) => es.id === s.id || es._id === s._id)
+          )];
+          // Merge medicines
+          const existingMedicines = existing.medicines || [];
+          const newMedicines = patient.medicines || [];
+          existing.medicines = [...existingMedicines, ...newMedicines.filter((m: any) => 
+            !existingMedicines.some((em: any) => em.id === m.id || em._id === m._id)
+          )];
+          // Use the most complete data (prefer non-empty fields)
+          // Handle both formats
+          if (!existing.name && patientName) existing.name = patientName;
+          if (!existing.firstname && patient.firstname) existing.firstname = patient.firstname;
+          if (!existing.lastname && patient.lastname) existing.lastname = patient.lastname;
+          if (!existing.contactNumber && patientContact) existing.contactNumber = patientContact;
+          if (!existing.phone && patient.phone) existing.phone = patient.phone;
+          if (!existing.email && patient.email) existing.email = patient.email;
+          if (!existing.address && patient.address) existing.address = patient.address;
+          if (!existing.dateOfBirth && (patient.dateOfBirth || patient.dob)) existing.dateOfBirth = patient.dateOfBirth || patient.dob;
+          if (!existing.sex && (patient.sex || patient.gender)) existing.sex = patient.sex || patient.gender;
+        } else {
+          // New patient - normalize the data format
+          const normalizedPatient = {
+            ...patient,
+            name: patientName || patient.name,
+            contactNumber: patientContact || patient.contactNumber,
+            dateOfBirth: patient.dateOfBirth || patient.dob,
+            sex: patient.sex || patient.gender
+          };
+          // Use name, contact, or ID as key
+          const key = nameKey || contactKey || idKey || `patient_${Date.now()}_${Math.random()}`;
+          patientMap.set(key, normalizedPatient);
+        }
+      });
+      
+      setPatients(Array.from(patientMap.values()));
     } catch (err) {
       console.error("fetchPatientsFromDb error:", err);
       setPatients([]);
@@ -108,10 +199,156 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
 
   useEffect(() => {
     fetchPatientsFromDb();
+    
+    // Fetch EMR and Pharmacy data for all patients
+    const fetchPatientData = async () => {
+      const emrDataMap = new Map();
+      const pharmDataMap = new Map();
+      
+      try {
+        // Fetch all EMR appointments
+        const emrRes = await fetch(`${API_URL}/emr/appointments`);
+        if (emrRes.ok) {
+          const emrData = await emrRes.json();
+          if (emrData.success && Array.isArray(emrData.data)) {
+            emrData.data.forEach((apt: any) => {
+              // Try multiple ways to get patient ID
+              let patientId = apt.patientId;
+              if (!patientId && apt.patient) {
+                patientId = typeof apt.patient === 'object' ? apt.patient.toString() : apt.patient;
+              }
+              // Also try to match by patient ObjectId
+              if (!patientId && apt.patient && typeof apt.patient === 'object' && apt.patient._id) {
+                patientId = apt.patient._id.toString();
+              }
+              
+              if (patientId) {
+                const patientIdStr = patientId.toString();
+                if (!emrDataMap.has(patientIdStr)) {
+                  emrDataMap.set(patientIdStr, { services: [], medicines: [] });
+                }
+                const data = emrDataMap.get(patientIdStr);
+                data.services.push({
+                  serviceId: apt._id || apt.id,
+                  service: apt.reason || apt.chiefComplaint || 'Medical Consultation',
+                  category: 'EMR Services',
+                  quantity: 1,
+                  date: apt.date || apt.appointmentDate || apt.createdAt,
+                  provider: apt.doctor || apt.doctorName || 'Unknown',
+                  notes: apt.notes || ''
+                });
+              }
+            });
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to fetch EMR data:', err);
+      }
+      
+      try {
+        // Fetch all pharmacy sales
+        const pharmRes = await fetch(`${API_URL}/pharmacy/sales`);
+        if (pharmRes.ok) {
+          const pharmData = await pharmRes.json();
+          if (pharmData.success && Array.isArray(pharmData.data)) {
+            pharmData.data.forEach((sale: any) => {
+              // Try multiple ways to get patient ID
+              let patientId = sale.patientId;
+              if (!patientId && sale.patient) {
+                patientId = typeof sale.patient === 'object' ? sale.patient.toString() : sale.patient;
+              }
+              // Also try to match by patient ObjectId
+              if (!patientId && sale.patient && typeof sale.patient === 'object' && sale.patient._id) {
+                patientId = sale.patient._id.toString();
+              }
+              
+              if (patientId) {
+                const patientIdStr = patientId.toString();
+                if (!pharmDataMap.has(patientIdStr)) {
+                  pharmDataMap.set(patientIdStr, []);
+                }
+                const items = sale.items || [];
+                pharmDataMap.get(patientIdStr).push(...items.map((item: any) => ({
+                  id: item._id || item.id,
+                  name: item.name || item.medicationName || item.medicineName || 'Unknown Medication',
+                  description: item.name || item.medicationName || item.medicineName || 'Unknown Medication',
+                  quantity: item.quantity || 0,
+                  unitPrice: item.price || item.unitPrice || 0,
+                  totalPrice: item.total || item.totalPrice || (item.quantity || 0) * (item.price || item.unitPrice || 0),
+                  strength: item.strength || '',
+                  date: sale.createdAt || sale.date
+                })));
+              }
+            });
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to fetch pharmacy data:', err);
+      }
+      
+      setPatientEmrData(emrDataMap);
+      setPatientPharmacyData(pharmDataMap);
+    };
+    
+    fetchPatientData();
   }, []);
 
-  // Helper to robustly resolve EMR/mock data for a patient using multiple possible keys
-  const getEmrDataForPatient = (patient: any) => {
+  // Helper to robustly resolve EMR data for a patient - fetch from real APIs
+  const getEmrDataForPatient = async (patient: any) => {
+    if (!patient) return null;
+    
+    const candidates = [
+      getInternalPatientKey(patient),
+      patient.patientId,
+      patient.id,
+      patient._id,
+      getDisplayPatientId(patient)
+    ];
+    
+    // Try to fetch from real EMR API
+    for (const k of candidates) {
+      if (!k) continue;
+      try {
+        const response = await fetch(`${API_URL}/emr/appointments?patientId=${k}`);
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success && data.data && Array.isArray(data.data) && data.data.length > 0) {
+            // Transform appointments to services format
+            return {
+              services: data.data.map((apt: any) => ({
+                serviceId: apt._id || apt.id,
+                service: apt.reason || apt.chiefComplaint || 'Medical Consultation',
+                category: 'EMR Services',
+                quantity: 1,
+                date: apt.date || apt.appointmentDate || apt.createdAt,
+                provider: apt.doctor || apt.doctorName || 'Unknown',
+                notes: apt.notes || ''
+              })),
+              medicines: [] // Appointments don't have medicines directly
+            };
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to fetch EMR data for patient:', err);
+      }
+    }
+    
+    // Fallback to mock data if API fails
+    for (const k of candidates) {
+      if (!k) continue;
+      try {
+        const data = MockEmrService.getPatientEmrData(String(k));
+        if (data) return data;
+      } catch (err) {
+        // ignore
+      }
+    }
+    
+    return null;
+  };
+  
+  // Synchronous version for display (uses cached data)
+  const getEmrDataForPatientSync = (patient: any) => {
     if (!patient) return null;
     const candidates = [
       getInternalPatientKey(patient),
@@ -122,8 +359,12 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
     ];
     for (const k of candidates) {
       if (!k) continue;
-      const data = MockEmrService.getPatientEmrData(String(k));
-      if (data) return data;
+      try {
+        const data = MockEmrService.getPatientEmrData(String(k));
+        if (data) return data;
+      } catch (err) {
+        // ignore
+      }
     }
     return null;
   };
@@ -257,6 +498,7 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
   // Archive (soft-delete) flow: open dialog and call archive endpoint
   const [archiveDialogOpen, setArchiveDialogOpen] = useState(false);
   const [archiveTarget, setArchiveTarget] = useState<string | null>(null);
+  const [showCreateConfirm, setShowCreateConfirm] = useState(false);
 
   const confirmArchivePatient = (id: string) => {
     setArchiveTarget(id);
@@ -460,13 +702,15 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
                 : 'View patient information, services, and pharmacy purchases'}
             </p>
           </div>
-          <Button
-            onClick={() => setShowAddPatientDialog(true)}
-            className="bg-[#E94D61] hover:bg-[#E94D61]/90 text-white"
-          >
-            <UserPlus className="mr-2 h-4 w-4" />
-            Add New Patient
-          </Button>
+          {userSession?.role === 'admin' && (
+            <Button
+              onClick={() => setShowAddPatientDialog(true)}
+              className="bg-[#E94D61] hover:bg-[#E94D61]/90 text-white"
+            >
+              <UserPlus className="mr-2 h-4 w-4" />
+              Add New Patient
+            </Button>
+          )}
         </div>
       </div>
 
@@ -493,7 +737,13 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
           </CardHeader>
           <CardContent>
             <div className="text-3xl font-bold text-gray-900">
-              {patients.reduce((sum, p) => sum + (p.services?.length || 0), 0)}
+              {patients.reduce((sum, p) => {
+                const patientId = getInternalPatientKey(p) || p.patientId || p.id || p._id;
+                const emr = patientEmrData.get(patientId?.toString());
+                const localCount = p.services?.length || 0;
+                const emrCount = (emr && Array.isArray(emr.services)) ? emr.services.length : 0;
+                return sum + localCount + emrCount;
+              }, 0)}
             </div>
           </CardContent>
         </Card>
@@ -507,7 +757,13 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
           </CardHeader>
           <CardContent>
             <div className="text-3xl font-bold text-gray-900">
-              {patients.reduce((sum, p) => sum + (p.medicines?.length || 0), 0)}
+              {patients.reduce((sum, p) => {
+                const patientId = getInternalPatientKey(p) || p.patientId || p.id || p._id;
+                const pharmItems = patientPharmacyData.get(patientId?.toString()) || [];
+                const localCount = p.medicines?.length || 0;
+                const pharmCount = pharmItems.length;
+                return sum + localCount + pharmCount;
+              }, 0)}
             </div>
           </CardContent>
         </Card>
@@ -549,7 +805,7 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
                 placeholder="Search patients..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-10 w-64 bg-white"
+                className="pl-10 w-64 bg-white text-gray-900 placeholder:text-gray-300"
               />
             </div>
           </div>
@@ -611,24 +867,86 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
                               <Activity size={14} className="mr-1" />
                               Services
                             </p>
-                            <p className="font-medium">{patient.services?.length || 0} services</p>
+                            {(() => {
+                              const patientId = getInternalPatientKey(patient) || patient.patientId || patient.id || patient._id;
+                              const emr = patientEmrData.get(patientId?.toString());
+                              const localCount = patient.services?.length || 0;
+                              const emrCount = (emr && Array.isArray(emr.services)) ? emr.services.length : 0;
+                              const count = localCount + emrCount;
+                              return <p className="font-medium">{count} {count === 1 ? 'service' : 'services'}</p>;
+                            })()}
                           </div>
                           <div>
                             <p className="text-gray-500 flex items-center">
                               <Pill size={14} className="mr-1" />
                               Medicines
                             </p>
-                            <p className="font-medium">{patient.medicines?.length || 0} items</p>
+                            {(() => {
+                              const patientId = getInternalPatientKey(patient) || patient.patientId || patient.id || patient._id;
+                              const pharmItems = patientPharmacyData.get(patientId?.toString()) || [];
+                              const localCount = patient.medicines?.length || 0;
+                              const pharmCount = pharmItems.length;
+                              const count = localCount + pharmCount;
+                              return <p className="font-medium">{count} {count === 1 ? 'item' : 'items'}</p>;
+                            })()}
                           </div>
                           <div>
                             <p className="text-gray-500 flex items-center">
                               <Receipt size={14} className="mr-1" />
                               Total Charges
                             </p>
-                            <p className="font-semibold text-[#358E83]">
+                          <p className="font-semibold text-[#358E83]">
                               ₱{charges.total.toLocaleString('en-PH', { minimumFractionDigits: 2 })}
-                            </p>
+                          </p>
+                        </div>
+                        <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div>
+                            <p className="text-xs text-gray-500">Services</p>
+                            <div className="space-y-1">
+                              {(() => {
+                                const patientId = getInternalPatientKey(patient) || patient.patientId || patient.id || patient._id;
+                                const emr = patientEmrData.get(patientId?.toString());
+                                const localServices = patient.services || [];
+                                const emrServices = (emr && Array.isArray(emr.services)) ? emr.services : [];
+                                const allServices = [...localServices, ...emrServices];
+                                
+                                if (allServices.length === 0) {
+                                  return <div className="text-xs text-gray-400">No services</div>;
+                                }
+                                
+                                return allServices.slice(0, 3).map((s: any, i: number) => (
+                                  <div key={`svc-${i}`} className="text-sm text-gray-800">
+                                    {s.description || s.service || s.name || 'Service'}
+                                    <span className="text-gray-500">{s.category ? ` • ${s.category}` : ''}</span>
+                                    <span className="text-gray-500">{s.quantity ? ` • ${s.quantity}` : ''}</span>
+                                  </div>
+                                ));
+                              })()}
+                            </div>
                           </div>
+                          <div>
+                            <p className="text-xs text-gray-500">Medicines</p>
+                            <div className="space-y-1">
+                              {(() => {
+                                const patientId = getInternalPatientKey(patient) || patient.patientId || patient.id || patient._id;
+                                const pharmItems = patientPharmacyData.get(patientId?.toString()) || [];
+                                const localMedicines = patient.medicines || [];
+                                const allMedicines = [...localMedicines, ...pharmItems];
+                                
+                                if (allMedicines.length === 0) {
+                                  return <div className="text-xs text-gray-400">No medicines</div>;
+                                }
+                                
+                                return allMedicines.slice(0, 3).map((m: any, i: number) => (
+                                  <div key={`med-${i}`} className="text-sm text-gray-800">
+                                    {(m.name || m.description || 'Item')}{m.strength ? ` (${m.strength})` : ''}
+                                    <span className="text-gray-500">{m.quantity ? ` • Qty: ${m.quantity}` : ''}</span>
+                                  </div>
+                                ));
+                              })()}
+                            </div>
+                          </div>
+                        </div>
                         </div>
                       </div>
                       
@@ -777,7 +1095,8 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
 
                         {(() => {
                           try {
-                            const emr = getEmrDataForPatient(selectedPatient);
+                            const patientId = getInternalPatientKey(selectedPatient) || selectedPatient.patientId || selectedPatient.id || selectedPatient._id;
+                            const emr = patientEmrData.get(patientId?.toString());
                             if (emr && Array.isArray(emr.services) && emr.services.length > 0) {
                               return emr.services.map((es: any, idx: number) => (
                                 <div key={`emr-s-${idx}`} className="p-2 border rounded bg-gray-50 flex items-start justify-between">
@@ -821,9 +1140,10 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
 
                         {(() => {
                           try {
-                            const emr = getEmrDataForPatient(selectedPatient);
-                            if (emr && Array.isArray((emr as any).medicines) && (emr as any).medicines.length > 0) {
-                              return (emr as any).medicines.map((med: any, idx: number) => (
+                            const patientId = getInternalPatientKey(selectedPatient) || selectedPatient.patientId || selectedPatient.id || selectedPatient._id;
+                            const pharmItems = patientPharmacyData.get(patientId?.toString()) || [];
+                            if (pharmItems.length > 0) {
+                              return pharmItems.map((med: any, idx: number) => (
                                 <div key={`emr-m-${idx}`} className="p-2 border rounded bg-gray-50 flex items-start justify-between">
                                   <div>
                                     <div className="font-medium">{med.name}</div>
@@ -1050,12 +1370,35 @@ export function PatientsManagement({ onNavigateToView, userSession }: PatientsMa
               Cancel
             </Button>
             <Button
-              onClick={handleAddPatient}
+              onClick={() => setShowCreateConfirm(true)}
               className="flex-1 bg-[#358E83] hover:bg-[#358E83]/90 text-white"
+              disabled={!patientForm.name || !patientForm.dateOfBirth || !patientForm.sex || !patientForm.contactNumber || !patientForm.address || !patientForm.email || !patientForm.bloodType || !patientForm.emergencyContactName || !patientForm.emergencyContactRelationship || !patientForm.emergencyContactPhone}
             >
               {editingPatientId ? "Save Changes" : "Add Patient"}
             </Button>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Create Patient Confirmation Dialog */}
+      <Dialog open={showCreateConfirm} onOpenChange={setShowCreateConfirm}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Confirm Add Patient?</DialogTitle>
+            <DialogDescription>
+              Please confirm the details below before saving.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 text-sm">
+            <div className="flex justify-between"><span>Name</span><span className="font-medium">{patientForm.name || '-'}</span></div>
+            <div className="flex justify-between"><span>Date of Birth</span><span className="font-medium">{patientForm.dateOfBirth || '-'}</span></div>
+            <div className="flex justify-between"><span>Sex</span><span className="font-medium">{patientForm.sex || '-'}</span></div>
+            <div className="flex justify-between"><span>Contact</span><span className="font-medium">{patientForm.contactNumber || '-'}</span></div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowCreateConfirm(false)}>Cancel</Button>
+            <Button className="bg-[#358E83] hover:bg-[#358E83]/90" onClick={() => { setShowCreateConfirm(false); handleAddPatient(); }}>Confirm</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

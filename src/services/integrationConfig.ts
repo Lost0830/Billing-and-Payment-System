@@ -34,12 +34,14 @@ export interface IntegrationConfig {
   };
 }
 
-// Helper function to safely get environment variables in browser
-const getEnvVar = (key: string, defaultValue: string): string => {
-  // In a real application, you might use import.meta.env for Vite
-  // or process environment variables set during build time
+// Helper function to safely get environment variables in browser/server
+const getEnvVar = (key: string, defaultValue: string = ''): string => {
+  // Works in browser when window.__ENV__ is injected, and safely returns default in server/runtime
   try {
-    return (window as any).__ENV__?.[key] || defaultValue;
+    if (typeof window !== 'undefined' && (window as any).__ENV__) {
+      return (window as any).__ENV__[key] ?? defaultValue;
+    }
+    return defaultValue;
   } catch {
     return defaultValue;
   }
@@ -48,7 +50,7 @@ const getEnvVar = (key: string, defaultValue: string): string => {
 // Default configuration (can be overridden by environment variables)
 export const defaultConfig: IntegrationConfig = {
   emr: {
-    baseUrl: getEnvVar("EMR_API_URL", "https://api.emr-system.hospital.ph"),
+    baseUrl: getEnvVar("EMR_API_URL", ""), // explicit default
     apiKey: getEnvVar("EMR_API_KEY", ""),
     version: "v1",
     endpoints: {
@@ -62,7 +64,7 @@ export const defaultConfig: IntegrationConfig = {
     timeout: 30000 // 30 seconds
   },
   pharmacy: {
-    baseUrl: getEnvVar("PHARMACY_API_URL", "https://api.pharmacy-system.hospital.ph"),
+    baseUrl: getEnvVar("PHARMACY_API_URL", ""),
     apiKey: getEnvVar("PHARMACY_API_KEY", ""), 
     version: "v1",
     endpoints: {

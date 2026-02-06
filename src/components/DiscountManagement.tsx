@@ -44,6 +44,7 @@ export function DiscountManagement({ onNavigateToView }: DiscountManagementProps
   const [promotionToDelete, setPromotionToDelete] = useState<string | null>(null);
   const [isCreatingDiscount, setIsCreatingDiscount] = useState(false);
   const [isCreatingPromotion, setIsCreatingPromotion] = useState(false);
+  const [showCreateConfirmDiscount, setShowCreateConfirmDiscount] = useState(false);
   
   // Load discounts and promotions from service
   const [discounts, setDiscounts] = useState<Discount[]>([]);
@@ -618,13 +619,38 @@ export function DiscountManagement({ onNavigateToView }: DiscountManagementProps
                 Cancel
               </Button>
               <Button 
-                onClick={handleCreateDiscount}
+                onClick={() => setShowCreateConfirmDiscount(true)}
                 disabled={isCreatingDiscount}
                 className="bg-[#358E83] hover:bg-[#358E83]/90"
               >
                 {isCreatingDiscount ? 'Creating...' : 'Create Discount'}
               </Button>
             </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showCreateConfirmDiscount} onOpenChange={setShowCreateConfirmDiscount}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Confirm Create Discount?</DialogTitle>
+            <DialogDescription>
+              Review details before creating the discount code.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 text-sm">
+            <div className="flex justify-between"><span>Code</span><span className="font-medium">{newDiscount.code || '-'}</span></div>
+            <div className="flex justify-between"><span>Name</span><span className="font-medium">{newDiscount.name || '-'}</span></div>
+            <div className="flex justify-between"><span>Type</span><span className="font-medium">{newDiscount.type}</span></div>
+            <div className="flex justify-between"><span>Value</span><span className="font-medium">{newDiscount.type === 'percentage' ? `${newDiscount.value}%` : `₱${newDiscount.value}`}</span></div>
+            <div className="flex justify-between"><span>Start</span><span className="font-medium">{newDiscount.startDate || '-'}</span></div>
+            <div className="flex justify-between"><span>End</span><span className="font-medium">{newDiscount.endDate || '-'}</span></div>
+            {newDiscount.description && (<div className="flex justify-between"><span>Description</span><span className="font-medium">{newDiscount.description}</span></div>)}
+            {newDiscount.conditions && (<div className="flex justify-between"><span>Conditions</span><span className="font-medium">{newDiscount.conditions}</span></div>)}
+          </div>
+          <div className="flex justify-end space-x-2">
+            <Button variant="outline" onClick={() => setShowCreateConfirmDiscount(false)}>Cancel</Button>
+            <Button className="bg-[#358E83] hover:bg-[#358E83]/90" onClick={() => { setShowCreateConfirmDiscount(false); handleCreateDiscount(); }}>Confirm</Button>
           </div>
         </DialogContent>
       </Dialog>

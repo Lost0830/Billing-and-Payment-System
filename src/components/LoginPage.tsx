@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Eye, EyeOff, ArrowLeft } from "lucide-react";
+import { Eye, EyeOff, ArrowLeft, Lock } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
@@ -12,18 +12,118 @@ interface LoginPageProps {
   onBack: () => void;
 }
 
+interface AccountLockState {
+  [email: string]: {
+    failedAttempts: number;
+    isLocked: boolean;
+    lockedUntil?: number;
+  };
+}
+
 export function LoginPage({ system, onLogin, onBack }: LoginPageProps) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [accountLocks, setAccountLocks] = useState<AccountLockState>(() => {
+    const stored = localStorage.getItem("accountLocks");
+    return stored ? JSON.parse(stored) : {};
+  });
+  const [showUnlockDialog, setShowUnlockDialog] = useState(false);
+  const [superPin, setSuperPin] = useState("");
+  const [lockedEmail, setLockedEmail] = useState("");
 
-  const baseUrl = "http://localhost:5000/api";
+  const baseUrl = "http://localhost:5002/api";
+  const MAX_ATTEMPTS = 3;
+  const SUPER_PIN = "1818";
+
+  // Save account locks to localStorage
+  const saveAccountLocks = (locks: AccountLockState) => {
+    localStorage.setItem("accountLocks", JSON.stringify(locks));
+    setAccountLocks(locks);
+  };
+
+  // Check if account is locked
+  const isAccountLocked = (userEmail: string): boolean => {
+    const lockData = accountLocks[userEmail];
+    if (!lockData) return false;
+
+    if (lockData.isLocked && lockData.lockedUntil) {
+      const now = Date.now();
+      if (now < lockData.lockedUntil) {
+        return true;
+      } else {
+        // Lock has expired, reset it
+        const updatedLocks = { ...accountLocks };
+        delete updatedLocks[userEmail];
+        saveAccountLocks(updatedLocks);
+        return false;
+      }
+    }
+    return lockData.isLocked;
+  };
+
+  // Increment failed attempts
+  const incrementFailedAttempts = (userEmail: string) => {
+    const updatedLocks = { ...accountLocks };
+    const currentData = updatedLocks[userEmail] || { failedAttempts: 0, isLocked: false };
+
+    currentData.failedAttempts += 1;
+
+    if (currentData.failedAttempts >= MAX_ATTEMPTS) {
+      currentData.isLocked = true;
+      currentData.lockedUntil = Date.now() + 30 * 60 * 1000; // Lock for 30 minutes
+    }
+
+    updatedLocks[userEmail] = currentData;
+    saveAccountLocks(updatedLocks);
+
+    return currentData;
+  };
+
+  // Reset failed attempts on successful login
+  const resetFailedAttempts = (userEmail: string) => {
+    const updatedLocks = { ...accountLocks };
+    delete updatedLocks[userEmail];
+    saveAccountLocks(updatedLocks);
+  };
+
+  // Handle unlock with SUPER PIN
+  const handleUnlockAccount = () => {
+    if (superPin !== SUPER_PIN) {
+      toast.error("❌ Invalid SUPER PIN");
+      return;
+    }
+
+    const updatedLocks = { ...accountLocks };
+    delete updatedLocks[lockedEmail];
+    saveAccountLocks(updatedLocks);
+
+    toast.success("✅ Account unlocked successfully");
+    setShowUnlockDialog(false);
+    setSuperPin("");
+    setLockedEmail("");
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
     if (!email || !password) {
       toast.error("Please enter both email and password");
+      return;
+    }
+
+    // Check if account is locked
+    if (isAccountLocked(email)) {
+      const lockData = accountLocks[email];
+      const remainingTime = lockData.lockedUntil
+        ? Math.ceil((lockData.lockedUntil - Date.now()) / 60000)
+        : 0;
+      toast.error(
+        `🔒 Account is locked. Try again in ${remainingTime} minutes or unlock with SUPER PIN.`
+      );
+      setLockedEmail(email);
+      setShowUnlockDialog(true);
       return;
     }
 
@@ -37,12 +137,27 @@ export function LoginPage({ system, onLogin, onBack }: LoginPageProps) {
 
       const data = await res.json();
       if (data.success) {
+        resetFailedAttempts(email);
         toast.success("✅ Login successful");
         onLogin({ email, password, system, user: data.user });
       } else {
-        toast.error(data.message || "Invalid email or password");
+        const lockData = incrementFailedAttempts(email);
+        const remainingAttempts = MAX_ATTEMPTS - lockData.failedAttempts;
+
+        if (lockData.isLocked) {
+          toast.error(
+            `🔒 Account locked after ${MAX_ATTEMPTS} failed attempts. Contact administrator or use SUPER PIN to unlock.`
+          );
+          setLockedEmail(email);
+          setShowUnlockDialog(true);
+        } else {
+          toast.error(
+            `❌ ${data.message || "Invalid email or password"}. ${remainingAttempts} attempt(s) remaining.`
+          );
+        }
       }
     } catch (err) {
+      incrementFailedAttempts(email);
       toast.error("Server connection failed");
       console.error(err);
     } finally {
@@ -120,6 +235,10 @@ export function LoginPage({ system, onLogin, onBack }: LoginPageProps) {
                 <div className="flex items-center">
                   <div className="w-2 h-2 bg-white rounded-full mr-3"></div>
                   <span className="text-white/90">Enterprise Security</span>
+                </div>
+                <div className="flex items-center">
+                  <div className="w-2 h-2 bg-white rounded-full mr-3"></div>
+                  <span className="text-white/90">Account Lockout Protection</span>
                 </div>
               </div>
             </div>
@@ -219,6 +338,57 @@ export function LoginPage({ system, onLogin, onBack }: LoginPageProps) {
             <div className="w-16 h-16 border-4 border-[#358E83] border-t-transparent rounded-full animate-spin mb-4"></div>
             <h3 className="text-lg font-semibold text-gray-900 mb-2">Signing In</h3>
             <p className="text-sm text-gray-600 text-center">Please wait while we authenticate your credentials...</p>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Account Unlock Dialog */}
+      <Dialog open={showUnlockDialog} onOpenChange={setShowUnlockDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-red-600">
+              <Lock size={24} />
+              Account Locked
+            </DialogTitle>
+            <DialogDescription>
+              This account has been locked due to multiple failed login attempts. Enter the SUPER PIN provided by your system administrator to unlock.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div>
+              <p className="text-sm font-medium text-gray-700 mb-2">Locked Email: {lockedEmail}</p>
+              <Label htmlFor="super-pin">SUPER PIN</Label>
+              <Input
+                id="super-pin"
+                type="password"
+                placeholder="Enter 4-digit SUPER PIN"
+                value={superPin}
+                onChange={(e) => setSuperPin(e.target.value.slice(0, 4))}
+                maxLength={4}
+                className="tracking-widest text-center text-2xl"
+              />
+            </div>
+
+            <div className="flex gap-3">
+              <Button
+                onClick={() => {
+                  setShowUnlockDialog(false);
+                  setSuperPin("");
+                }}
+                variant="outline"
+                className="flex-1"
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleUnlockAccount}
+                disabled={superPin.length !== 4}
+                className="flex-1 bg-[#358E83] hover:bg-[#2b6f68]"
+              >
+                Unlock Account
+              </Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>

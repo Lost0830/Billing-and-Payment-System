@@ -93,6 +93,13 @@ export class EMRIntegrationService {
   // Fetch patient data from EMR
   async getPatients(limit: number = 50, offset: number = 0): Promise<EMRPatient[]> {
     try {
+      if (this.config.baseUrl && this.config.baseUrl.startsWith('/api')) {
+        const resp = await this.makeRequest('/patients');
+        this.status.lastSync = new Date();
+        const arr = (resp?.data || resp) as EMRPatient[];
+        this.status.totalSynced += Array.isArray(arr) ? arr.length : 0;
+        return arr;
+      }
       // Mock data - replace with actual API call
       const mockPatients: EMRPatient[] = [
         {
@@ -151,41 +158,14 @@ export class EMRIntegrationService {
   // Fetch appointments from EMR
   async getAppointments(patientId?: string, dateFrom?: string, dateTo?: string): Promise<EMRAppointment[]> {
     try {
-      // Mock data - replace with actual API call
-      const mockAppointments: EMRAppointment[] = [
-        {
-          id: "appt_001",
-          patientId: "P001",
-          doctorId: "DOC-001",
-          doctorName: "Dr. Juan Reyes",
-          department: "Internal Medicine",
-          appointmentDate: "2025-01-03",
-          appointmentTime: "10:00",
-          duration: 30,
-          type: "Consultation",
-          status: "Completed",
-          notes: "Initial assessment for abdominal pain",
-          cost: 1500
-        },
-        {
-          id: "appt_002",
-          patientId: "P004", 
-          doctorId: "DOC-002",
-          doctorName: "Dr. Pedro Gonzales",
-          department: "Surgery",
-          appointmentDate: "2024-12-31",
-          appointmentTime: "14:00",
-          duration: 120,
-          type: "Surgery",
-          status: "Completed",
-          notes: "Emergency appendectomy",
-          cost: 50000
-        }
-      ];
-
-      return patientId 
-        ? mockAppointments.filter(apt => apt.patientId === patientId)
-        : mockAppointments;
+      if (this.config.baseUrl && this.config.baseUrl.startsWith('/api')) {
+        const qs = new URLSearchParams({ patientId: patientId || '' }).toString();
+        const resp = await this.makeRequest(`/appointments${qs ? `?${qs}` : ''}`);
+        return (resp?.data || resp) as EMRAppointment[];
+      }
+      // No mock data - return empty array if API is not configured
+      console.warn('EMR API not configured, returning empty appointments');
+      return [];
     } catch (error) {
       this.status.lastError = `Failed to fetch appointments: ${error}`;
       throw error;
@@ -195,6 +175,11 @@ export class EMRIntegrationService {
   // Fetch treatment records for billing
   async getTreatments(patientId?: string, unbilledOnly: boolean = false): Promise<EMRTreatment[]> {
     try {
+      if (this.config.baseUrl && this.config.baseUrl.startsWith('/api')) {
+        const qs = new URLSearchParams({ patientId: patientId || '', unbilledOnly: String(unbilledOnly || '') }).toString();
+        const resp = await this.makeRequest(`/treatments${qs ? `?${qs}` : ''}`);
+        return (resp?.data || resp) as EMRTreatment[];
+      }
       // Mock data - replace with actual API call  
       const mockTreatments: EMRTreatment[] = [
         {
@@ -265,7 +250,10 @@ export class EMRIntegrationService {
   // Mark treatment as billed in EMR system
   async markTreatmentAsBilled(treatmentId: string, invoiceId: string): Promise<boolean> {
     try {
-      // Mock API call - replace with actual EMR API
+      if (this.config.baseUrl && this.config.baseUrl.startsWith('/api')) {
+        const resp = await this.makeRequest(`/treatments/${treatmentId}/mark-billed`, { method: 'POST', body: JSON.stringify({ invoiceId }), headers: { 'Content-Type': 'application/json' } });
+        return !!resp;
+      }
       console.log(`Marking treatment ${treatmentId} as billed with invoice ${invoiceId}`);
       return true;
     } catch (error) {
@@ -281,11 +269,11 @@ export class EMRIntegrationService {
 
   // Private method to make API requests
   private async makeRequest(endpoint: string, options: RequestInit = {}): Promise<any> {
-    const url = `${this.config.baseUrl}${this.config.endpoints.patients || endpoint}`;
+    const url = `${this.config.baseUrl}${endpoint}`;
     
     const defaultOptions: RequestInit = {
       headers: {
-        'Authorization': `Bearer ${this.config.apiKey}`,
+        'Authorization': this.config.apiKey ? `Bearer ${this.config.apiKey}` : undefined,
         'Content-Type': 'application/json',
         'Accept': 'application/json'
       },
